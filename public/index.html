@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Job Tracker</title>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f7f7f7;
+        color: #1f1f1f;
+      }
+      .card {
+        background: #fff;
+        padding: 40px;
+        border-radius: 12px;
+        box-shadow: 0 6px 20px rgb(15 15 15 / 0.1);
+        text-align: center;
+        max-width: 420px;
+        width: 90%;
+      }
+      h1 {
+        margin-bottom: 10px;
+      }
+      p {
+        margin-bottom: 24px;
+        line-height: 1.5;
+      }
+      .error {
+        color: #b00020;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Hello, welcome to Job Tracker</h1>
+      <p>Sign in with Google to continue.</p>
+      <div id="google-section">
+        <div id="google-signin"></div>
+      </div>
+      <div id="error" class="error"></div>
+    </div>
+
+    <script>
+      const state = {
+        googleClientId: null,
+        gisReady: false,
+      };
+      const errorEl = document.getElementById('error');
+
+      function showError(message) {
+        errorEl.textContent = message || '';
+      }
+
+      async function createSession(credential) {
+        try {
+          const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ credential }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || 'Failed to sign in');
+          }
+          sessionStorage.setItem('googleUser', JSON.stringify(data.user));
+          window.location.href = '/welcome.html';
+        } catch (err) {
+          console.error('Login error', err);
+          showError(err.message || 'Failed to sign in');
+        }
+      }
+
+      async function initGoogleSignIn() {
+        if (state.gisReady) return;
+        if (!state.googleClientId) {
+          const res = await fetch('/api/config');
+          const config = await res.json();
+          state.googleClientId = config.googleClientId;
+        }
+
+        if (!state.googleClientId) {
+          showError('Google Sign-In not configured');
+          return;
+        }
+
+        if (!window.google || !window.google.accounts || !window.google.accounts.id) {
+          setTimeout(initGoogleSignIn, 300);
+          return;
+        }
+
+        window.google.accounts.id.initialize({
+          client_id: state.googleClientId,
+          callback: (response) => {
+            if (!response.credential) {
+              showError('Google Sign-In failed. Please try again.');
+              return;
+            }
+            createSession(response.credential);
+          },
+        });
+
+        window.google.accounts.id.renderButton(document.getElementById('google-signin'), {
+          theme: 'outline',
+          size: 'large',
+        });
+        state.gisReady = true;
+      }
+
+      async function checkExistingSession() {
+        try {
+          const res = await fetch('/api/me');
+          if (res.ok) {
+            const data = await res.json();
+            sessionStorage.setItem('googleUser', JSON.stringify(data.user));
+            window.location.href = '/welcome.html';
+            return;
+          }
+        } catch (err) {
+          console.warn('Session check failed', err);
+        }
+        initGoogleSignIn().catch((err) => {
+          console.error('Failed to init Google Sign-In', err);
+          showError('Failed to load Google Sign-In');
+        });
+      }
+
+      checkExistingSession();
+    </script>
+  </body>
+</html>

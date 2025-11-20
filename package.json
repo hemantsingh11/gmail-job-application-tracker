@@ -1,0 +1,25 @@
+{
+  "name": "jobapp",
+  "version": "1.0.0",
+  "description": "Local profile webapp with Express + Azure Cosmos DB",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@azure/cosmos": "^4.7.0",
+    "@azure/identity": "^4.13.0",
+    "@azure/keyvault-secrets": "^4.10.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "googleapis": "^166.0.0",
+    "html-to-text": "^9.0.5",
+    "node-cron": "^4.2.1"
+  }
+}
