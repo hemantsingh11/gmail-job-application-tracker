@@ -1,14 +1,24 @@
-const path = require('path');
-const express = require('express');
-const cors = require('cors');
-const { CosmosClient } = require('@azure/cosmos');
-const { google } = require('googleapis');
-const cron = require('node-cron');
-const { htmlToText } = require('html-to-text');
-const crypto = require('crypto');
-require('dotenv').config();
-const tokenStore = require('./gmailTokenStore');
-const gmailStateStore = require('./gmailStateStore');
+import path from 'path';
+import crypto from 'crypto';
+import express, { type NextFunction, type Request, type Response } from 'express';
+import cors from 'cors';
+import { CosmosClient, type Container } from '@azure/cosmos';
+import { google } from 'googleapis';
+import type { OAuth2Client } from 'google-auth-library';
+import cron from 'node-cron';
+import { htmlToText } from 'html-to-text';
+import dotenv from 'dotenv';
+import type {
+  AuthedRequest,
+  ClassificationResult,
+  GmailEmailDoc,
+  JobDoc,
+  SessionPayload,
+} from './types';
+import * as tokenStore from './gmailTokenStore';
+import * as gmailStateStore from './gmailStateStore';
+
+dotenv.config();
 
 const COSMOS_URI = process.env.COSMOS_URI;
 const COSMOS_KEY = process.env.COSMOS_KEY;
@@ -18,7 +28,7 @@ const COSMOS_GMAIL_DATABASE = process.env.COSMOS_GMAIL_DATABASE || 'gmaildb';
 const COSMOS_GMAIL_CONTAINER = process.env.COSMOS_GMAIL_CONTAINER || 'emails';
 const COSMOS_JOBS_DATABASE = process.env.COSMOS_JOBS_DATABASE || 'jobsdb';
 const COSMOS_JOBS_CONTAINER = process.env.COSMOS_JOBS_CONTAINER || 'applications';
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT || '3000');
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const GOOGLE_REDIRECT_URI =
@@ -32,11 +42,20 @@ const SESSION_DURATION_MS = SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000;
 const SESSION_COOKIE_NAME = 'jobapp_session';
 const SESSION_COOKIE_OPTIONS = {
   httpOnly: true,
-  sameSite: 'lax',
+  sameSite: 'lax' as const,
   secure: process.env.NODE_ENV === 'production',
   maxAge: SESSION_DURATION_MS,
 };
 const EASTERN_TIMEZONE = 'America/New_York';
+const STATIC_DIR = path.join(__dirname, '..', 'client', 'dist');
+
+declare global {
+  namespace Express {
+    interface Request {
+      userSession?: SessionPayload | null;
+    }
+  }
+}
 
 requireEnv('SESSION_SECRET', SESSION_SECRET);
 if (OPENAI_API_KEY) {
@@ -45,37 +64,38 @@ if (OPENAI_API_KEY) {
   console.warn('OPENAI_API_KEY not set. Job email classification is disabled.');
 }
 
-function requireEnv(name, value) {
+function requireEnv(name: string, value: string | undefined | null): string {
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
+  return value;
 }
 
-async function initCosmos() {
+async function initCosmos(): Promise<{ client: CosmosClient; container: Container }> {
   requireEnv('COSMOS_URI', COSMOS_URI);
   requireEnv('COSMOS_KEY', COSMOS_KEY);
   requireEnv('COSMOS_DATABASE', COSMOS_DATABASE);
   requireEnv('COSMOS_CONTAINER', COSMOS_CONTAINER);
 
-  const client = new CosmosClient({ endpoint: COSMOS_URI, key: COSMOS_KEY });
+  const client = new CosmosClient({ endpoint: COSMOS_URI!, key: COSMOS_KEY! });
 
   const { database } = await client.databases.createIfNotExists({
-    id: COSMOS_DATABASE,
+    id: COSMOS_DATABASE!,
   });
 
   const { container } = await database.containers.createIfNotExists({
-    id: COSMOS_CONTAINER,
+    id: COSMOS_CONTAINER!,
     partitionKey: '/email',
   });
 
   return { client, container };
 }
 
-async function initGmailCosmos() {
+async function initGmailCosmos(): Promise<{ client: CosmosClient; container: Container }> {
   requireEnv('COSMOS_URI', COSMOS_URI);
   requireEnv('COSMOS_KEY', COSMOS_KEY);
 
-  const client = new CosmosClient({ endpoint: COSMOS_URI, key: COSMOS_KEY });
+  const client = new CosmosClient({ endpoint: COSMOS_URI!, key: COSMOS_KEY! });
   const { database } = await client.databases.createIfNotExists({
     id: COSMOS_GMAIL_DATABASE,
   });
@@ -88,11 +108,11 @@ async function initGmailCosmos() {
   return { client, container };
 }
 
-async function initJobsCosmos() {
+async function initJobsCosmos(): Promise<{ client: CosmosClient; container: Container }> {
   requireEnv('COSMOS_URI', COSMOS_URI);
   requireEnv('COSMOS_KEY', COSMOS_KEY);
 
-  const client = new CosmosClient({ endpoint: COSMOS_URI, key: COSMOS_KEY });
+  const client = new CosmosClient({ endpoint: COSMOS_URI!, key: COSMOS_KEY! });
   const { database } = await client.databases.createIfNotExists({
     id: COSMOS_JOBS_DATABASE,
   });
@@ -105,18 +125,21 @@ async function initJobsCosmos() {
   return { client, container };
 }
 
-function createOAuthClient() {
+function createOAuthClient(): OAuth2Client {
   requireEnv('GOOGLE_CLIENT_ID', GOOGLE_CLIENT_ID);
   requireEnv('GOOGLE_CLIENT_SECRET', GOOGLE_CLIENT_SECRET);
   return new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI);
 }
 
-function extractHeader(headers = [], name) {
+function extractHeader(
+  headers: Array<{ name?: string | null; value?: string | null }> = [],
+  name: string
+): string {
   const header = headers.find((h) => h.name === name);
-  return header ? header.value : '';
+  return header ? header.value || '' : '';
 }
 
-function escapeHtml(str = '') {
+function escapeHtml(str = ''): string {
   return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -125,37 +148,37 @@ function escapeHtml(str = '') {
     .replace(/'/g, '&#39;');
 }
 
-function parseCookies(req) {
+function parseCookies(req: Request): Record<string, string> {
   const header = req.headers && req.headers.cookie;
   if (!header) return {};
-  return header.split(';').reduce((acc, part) => {
+  return header.split(';').reduce<Record<string, string>>((acc, part) => {
     const [rawKey, ...rest] = part.split('=');
     if (!rawKey) return acc;
     const key = rawKey.trim();
     const value = rest.join('=').trim();
     try {
       acc[key] = decodeURIComponent(value || '');
-    } catch (err) {
+    } catch {
       acc[key] = value || '';
     }
     return acc;
   }, {});
 }
 
-function encodeSessionPayload(payload) {
+function encodeSessionPayload(payload: SessionPayload): string {
   return Buffer.from(JSON.stringify(payload)).toString('base64url');
 }
 
-function decodeSessionPayload(data) {
+function decodeSessionPayload(data: string): SessionPayload {
   return JSON.parse(Buffer.from(data, 'base64url').toString('utf8'));
 }
 
-function signSessionData(data) {
-  return crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
+function signSessionData(data: string): string {
+  return crypto.createHmac('sha256', SESSION_SECRET!).update(data).digest('base64url');
 }
 
-function createSessionToken(user) {
-  const payload = {
+function createSessionToken(user: Partial<SessionPayload>): string {
+  const payload: SessionPayload = {
     name: user.name || '',
     email: user.email || '',
     picture: user.picture || '',
@@ -167,7 +190,7 @@ function createSessionToken(user) {
   return `${data}.${signature}`;
 }
 
-function verifySessionToken(token) {
+function verifySessionToken(token?: string | null): SessionPayload | null {
   if (!token) return null;
   const [data, signature] = token.split('.');
   if (!data || !signature) return null;
@@ -180,10 +203,10 @@ function verifySessionToken(token) {
   if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) {
     return null;
   }
-  let payload;
+  let payload: SessionPayload;
   try {
     payload = decodeSessionPayload(data);
-  } catch (err) {
+  } catch {
     return null;
   }
   if (payload.exp && payload.exp < Date.now()) {
@@ -192,13 +215,13 @@ function verifySessionToken(token) {
   return payload;
 }
 
-function setSessionCookie(res, user) {
+function setSessionCookie(res: Response, user: Partial<SessionPayload>): string {
   const token = createSessionToken(user);
   res.cookie(SESSION_COOKIE_NAME, token, SESSION_COOKIE_OPTIONS);
   return token;
 }
 
-function clearSessionCookie(res) {
+function clearSessionCookie(res: Response): void {
   res.clearCookie(SESSION_COOKIE_NAME, {
     httpOnly: true,
     sameSite: 'lax',
@@ -206,18 +229,18 @@ function clearSessionCookie(res) {
   });
 }
 
-function getSessionFromRequest(req) {
+function getSessionFromRequest(req: Request): SessionPayload | null {
   const cookies = parseCookies(req);
   const token = cookies[SESSION_COOKIE_NAME];
   if (!token) return null;
   return verifySessionToken(token);
 }
 
-function pad2(value) {
+function pad2(value: string | number): string {
   return String(value).padStart(2, '0');
 }
 
-function getPreviousEasternDayRangeSeconds() {
+function getPreviousEasternDayRangeSeconds(): { after: number; before: number } {
   const now = new Date();
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: EASTERN_TIMEZONE,
@@ -226,9 +249,11 @@ function getPreviousEasternDayRangeSeconds() {
     day: '2-digit',
     timeZoneName: 'shortOffset',
   });
-  const map = {};
+  const map: Record<string, string> = {};
   formatter.formatToParts(now).forEach((part) => {
-    map[part.type] = part.value;
+    if (part.type) {
+      map[part.type] = part.value;
+    }
   });
   let offset = map.timeZoneName || 'GMT-05:00';
   offset = offset.replace('GMT', '');
@@ -250,12 +275,12 @@ function getPreviousEasternDayRangeSeconds() {
   return { after: startYesterdaySeconds, before: startTodaySeconds };
 }
 
-function decodeBodyData(data = '') {
+function decodeBodyData(data = ''): string {
   const normalized = data.replace(/-/g, '+').replace(/_/g, '/');
   return Buffer.from(normalized, 'base64').toString('utf-8');
 }
 
-function extractMessageBody(part = {}) {
+function extractMessageBody(part: any = {}): string {
   if (part.parts && part.parts.length) {
     for (const subpart of part.parts) {
       const text = extractMessageBody(subpart);
@@ -275,7 +300,7 @@ function extractMessageBody(part = {}) {
   return '';
 }
 
-async function classifyEmail(emailDoc) {
+async function classifyEmail(emailDoc: GmailEmailDoc): Promise<ClassificationResult | null> {
   if (!OPENAI_API_KEY) {
     console.warn('OPENAI_API_KEY not set. Skipping classification.');
     return null;
@@ -299,7 +324,9 @@ Rules:
 - not_job_related: everything else.
 Always include a concise summary and company_name guess.`;
 
-  const content = `Subject: ${emailDoc.subject || '(no subject)'}\nFrom: ${emailDoc.from || 'unknown'}\n\nBody:\n${emailDoc.body || emailDoc.snippet || ''}`;
+  const content = `Subject: ${emailDoc.subject || '(no subject)'}\nFrom: ${
+    emailDoc.from || 'unknown'
+  }\n\nBody:\n${emailDoc.body || emailDoc.snippet || ''}`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -329,14 +356,18 @@ Always include a concise summary and company_name guess.`;
     if (!message) {
       throw new Error('Empty classification response');
     }
-    return JSON.parse(message);
-  } catch (err) {
+    return JSON.parse(message) as ClassificationResult;
+  } catch (err: any) {
     console.error('Email classification failed', err.message || err);
     return null;
   }
 }
 
-async function upsertJobStatus(jobsContainer, ownerRaw, classification) {
+async function upsertJobStatus(
+  jobsContainer: Container | null,
+  ownerRaw: string,
+  classification: ClassificationResult | null
+): Promise<JobDoc | null> {
   if (!jobsContainer) {
     console.warn('Jobs container missing. Skipping status upsert.');
     return null;
@@ -367,11 +398,11 @@ async function upsertJobStatus(jobsContainer, ownerRaw, classification) {
   const companySlug = companyName.toLowerCase().replace(/\s+/g, '_');
   const docId = `${ownerEmail}::${companySlug}`;
   const today = new Date().toISOString().slice(0, 10);
-  let doc;
+  let doc: JobDoc | null;
   try {
-    const { resource } = await jobsContainer.item(docId, pk).read();
-    doc = resource;
-  } catch (err) {
+    const { resource } = await jobsContainer.item(docId, pk).read<JobDoc>();
+    doc = resource || null;
+  } catch (err: any) {
     if (err.code === 404) {
       doc = {
         id: docId,
@@ -388,22 +419,22 @@ async function upsertJobStatus(jobsContainer, ownerRaw, classification) {
     }
   }
   if (!doc) {
-      doc = {
-        id: docId,
-        owner: ownerEmail,
-        company_name: companyName,
-        applied: 0,
-        rejected: 0,
-        next_steps: 0,
-        comments: [],
-        last_updated: today,
-      };
+    doc = {
+      id: docId,
+      owner: ownerEmail,
+      company_name: companyName,
+      applied: 0,
+      rejected: 0,
+      next_steps: 0,
+      comments: [],
+      last_updated: today,
+    };
   }
 
   if (!Array.isArray(doc.comments)) {
     doc.comments = [];
   } else if (doc.comments.length && typeof doc.comments[0] === 'string') {
-    doc.comments = doc.comments.map((note) => ({ date: today, note }));
+    doc.comments = doc.comments.map((note: any) => ({ date: today, note: String(note) }));
   }
 
   if (status === 'applied') {
@@ -422,7 +453,10 @@ async function upsertJobStatus(jobsContainer, ownerRaw, classification) {
   return doc;
 }
 
-async function classifyEmailAndUpsert(emailDoc, jobsContainer) {
+async function classifyEmailAndUpsert(
+  emailDoc: GmailEmailDoc,
+  jobsContainer: Container | null
+): Promise<ClassificationResult | null> {
   if (!jobsContainer) return null;
   const ownerEmail = (emailDoc.owner || '').trim().toLowerCase();
   if (!ownerEmail) {
@@ -432,17 +466,19 @@ async function classifyEmailAndUpsert(emailDoc, jobsContainer) {
   const classification = await classifyEmail(emailDoc);
   if (!classification) return null;
   console.log(
-    `Classified email "${emailDoc.subject || '(no subject)'}" → ${classification.status} (${classification.company_name || 'unknown company'})`
+    `Classified email "${emailDoc.subject || '(no subject)'}" → ${
+      classification.status
+    } (${classification.company_name || 'unknown company'})`
   );
   try {
     await upsertJobStatus(jobsContainer, ownerEmail, classification);
-  } catch (err) {
+  } catch (err: any) {
     console.error('Failed to upsert job status', err.message || err);
   }
   return classification;
 }
 
-async function verifyGoogleIdCredential(idToken) {
+async function verifyGoogleIdCredential(idToken?: string): Promise<any> {
   if (!idToken) {
     throw new Error('Missing Google credential');
   }
@@ -455,12 +491,12 @@ async function verifyGoogleIdCredential(idToken) {
 }
 
 async function fetchAndStoreGmailEmails(
-  emailContainer,
-  oauthClient,
-  jobsContainer,
-  ownerRaw,
-  options = {}
-) {
+  emailContainer: Container | null,
+  oauthClient: OAuth2Client | null,
+  jobsContainer: Container | null,
+  ownerRaw: string,
+  options: { queryOverride?: string; skipStateUpdate?: boolean } = {}
+): Promise<{ fetched: number; owner?: string }> {
   const ownerEmail = (ownerRaw || '').trim().toLowerCase();
   if (!ownerEmail) {
     throw new Error('Owner email required for Gmail fetch');
@@ -477,7 +513,7 @@ async function fetchAndStoreGmailEmails(
   if (!client) {
     const savedTokens = await tokenStore.loadTokens(ownerEmail);
     if (!savedTokens) {
-      const err = new Error('Gmail access not configured');
+      const err: any = new Error('Gmail access not configured');
       err.code = 'NO_GMAIL_TOKENS';
       throw err;
     }
@@ -486,21 +522,21 @@ async function fetchAndStoreGmailEmails(
   }
 
   client.on('tokens', (tokens) => {
-    tokenStore.saveTokens(ownerEmail, tokens).catch((err) => {
+    tokenStore.saveTokens(ownerEmail, tokens as Record<string, unknown>).catch((err) => {
       console.error('Failed to persist updated Gmail tokens', err);
     });
   });
 
   const gmail = google.gmail({ version: 'v1', auth: client });
 
-  let state = {};
-  let lastInternalDateMs = null;
+  let state: gmailStateStore.GmailState = {};
+  let lastInternalDateMs: number | null = null;
   if (useState) {
     state = (await gmailStateStore.loadState(ownerEmail)) || {};
     lastInternalDateMs = state.lastInternalDateMs ? Number(state.lastInternalDateMs) : null;
   }
 
-  const queryParts = [];
+  const queryParts: string[] = [];
   if (queryOverride) {
     queryParts.push(queryOverride);
   } else if (lastInternalDateMs) {
@@ -519,8 +555,8 @@ async function fetchAndStoreGmailEmails(
     );
   }
 
-  const docs = [];
-  let pageToken;
+  const docs: GmailEmailDoc[] = [];
+  let pageToken: string | undefined;
   let maxInternalDate = lastInternalDateMs || 0;
   do {
     const messageList = await gmail.users.messages.list({
@@ -530,7 +566,7 @@ async function fetchAndStoreGmailEmails(
       pageToken,
     });
     const messages = messageList.data.messages || [];
-    pageToken = messageList.data.nextPageToken;
+    pageToken = messageList.data.nextPageToken || undefined;
     if (!messages.length) {
       continue;
     }
@@ -538,14 +574,14 @@ async function fetchAndStoreGmailEmails(
     for (const message of messages) {
       const { data } = await gmail.users.messages.get({
         userId: 'me',
-        id: message.id,
+        id: message.id!,
         format: 'full',
       });
 
       const headers = data.payload ? data.payload.headers || [] : [];
       const internalDateMs = Number(data.internalDate) || Date.now();
-      const doc = {
-        id: data.id,
+      const doc: GmailEmailDoc = {
+        id: data.id || '',
         owner: ownerEmail,
         from: extractHeader(headers, 'From') || 'unknown',
         to: extractHeader(headers, 'To') || '',
@@ -562,11 +598,11 @@ async function fetchAndStoreGmailEmails(
         maxInternalDate = internalDateMs;
       }
 
-      let existingDoc = null;
+      let existingDoc: GmailEmailDoc | null = null;
       try {
-        const { resource } = await emailContainer.item(doc.id, ownerEmail).read();
-        existingDoc = resource;
-      } catch (err) {
+        const { resource } = await emailContainer.item(doc.id, ownerEmail).read<GmailEmailDoc>();
+        existingDoc = resource || null;
+      } catch (err: any) {
         if (err.code !== 404) {
           console.error('Failed to read existing Gmail doc', err);
         }
@@ -589,7 +625,7 @@ async function fetchAndStoreGmailEmails(
             doc.classifiedAt = new Date().toISOString();
             await emailContainer.items.upsert(doc);
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error('Failed to classify Gmail message', err);
         }
       }
@@ -615,7 +651,7 @@ async function fetchAndStoreGmailEmails(
   return { fetched: docs.length, owner: ownerEmail };
 }
 
-function scheduleGmailJob(emailContainer, jobsContainer) {
+function scheduleGmailJob(emailContainer: Container | null, jobsContainer: Container | null): void {
   cron.schedule(
     GMAIL_CRON,
     async () => {
@@ -642,7 +678,7 @@ function scheduleGmailJob(emailContainer, jobsContainer) {
             skipStateUpdate: true,
           });
           console.log(`[Cron] Completed scheduled fetch for ${owner}.`);
-        } catch (err) {
+        } catch (err: any) {
           if (err.code === 'NO_GMAIL_TOKENS') {
             console.warn(`Scheduled fetch skipped for ${owner}: Gmail tokens missing.`);
           } else {
@@ -658,17 +694,14 @@ function scheduleGmailJob(emailContainer, jobsContainer) {
   console.log(`Scheduled Gmail fetch with cron "${GMAIL_CRON}" (${EASTERN_TIMEZONE}).`);
 }
 
-async function start() {
+async function start(): Promise<void> {
   const app = express();
   app.use(cors());
   app.use(express.json());
-  app.use((req, res, next) => {
+  app.use((req: AuthedRequest, _res: Response, next: NextFunction) => {
     req.userSession = getSessionFromRequest(req);
     next();
   });
-
-  // Serve the simple frontend
-  app.use(express.static(path.join(__dirname, 'public')));
 
   const { container: profileContainer } = await initCosmos();
   const { container: gmailContainer } = await initGmailCosmos();
@@ -676,11 +709,11 @@ async function start() {
   scheduleGmailJob(gmailContainer, jobsContainer);
 
   // Expose minimal public config for the frontend
-  app.get('/api/config', (req, res) => {
+  app.get('/api/config', (_req: Request, res: Response) => {
     return res.json({ googleClientId: GOOGLE_CLIENT_ID || null });
   });
 
-  app.get('/api/me', (req, res) => {
+  app.get('/api/me', (req: AuthedRequest, res: Response) => {
     if (!req.userSession) {
       return res.status(401).json({ error: 'Not signed in' });
     }
@@ -688,8 +721,8 @@ async function start() {
     return res.json({ user: { name, email, picture } });
   });
 
-  app.post('/api/login', async (req, res) => {
-    const credential = (req.body && req.body.credential) || '';
+  app.post('/api/login', async (req: Request, res: Response) => {
+    const credential = (req.body && (req.body as any).credential) || '';
     if (!credential) {
       return res.status(400).json({ error: 'Missing credential' });
     }
@@ -705,18 +738,18 @@ async function start() {
       };
       setSessionCookie(res, user);
       return res.json({ user });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Login failed', err.message || err);
       return res.status(401).json({ error: 'Invalid Google credential' });
     }
   });
 
-  app.post('/api/logout', (req, res) => {
+  app.post('/api/logout', (_req: Request, res: Response) => {
     clearSessionCookie(res);
     return res.json({ ok: true });
   });
 
-  app.get('/auth/google', (req, res) => {
+  app.get('/auth/google', (req: AuthedRequest, res: Response) => {
     if (!req.userSession) {
       return res.redirect('/');
     }
@@ -739,21 +772,23 @@ async function start() {
     }
   });
 
-  app.get('/auth/google/callback', async (req, res) => {
+  app.get('/auth/google/callback', async (req: AuthedRequest, res: Response) => {
     if (!req.userSession) {
       return res.redirect('/');
     }
-    const code = req.query.code;
+    const code = req.query.code as string | undefined;
     if (!code) {
       return res.status(400).send('Missing authorization code.');
     }
 
-    const ownerEmail = (req.userSession && req.userSession.email) ? req.userSession.email.toLowerCase() : null;
+    const ownerEmail = req.userSession && req.userSession.email
+      ? req.userSession.email.toLowerCase()
+      : null;
     if (!ownerEmail) {
       return res.status(401).send('Not signed in.');
     }
 
-    let oauth2Client;
+    let oauth2Client: OAuth2Client;
     try {
       oauth2Client = createOAuthClient();
     } catch (err) {
@@ -764,7 +799,7 @@ async function start() {
     try {
       const { tokens } = await oauth2Client.getToken(code);
       oauth2Client.setCredentials(tokens);
-      await tokenStore.saveTokens(ownerEmail, tokens);
+      await tokenStore.saveTokens(ownerEmail, tokens as Record<string, unknown>);
 
       const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
       const profilePromise = gmail.users.getProfile({ userId: 'me' });
@@ -779,7 +814,7 @@ async function start() {
         messages.slice(0, 5).map(async (message) => {
           const { data } = await gmail.users.messages.get({
             userId: 'me',
-            id: message.id,
+            id: message.id!,
             format: 'metadata',
             metadataHeaders: ['Subject', 'From', 'Date'],
           });
@@ -839,13 +874,13 @@ async function start() {
         </html>`;
 
       return res.send(html);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Google auth callback error', err);
       return res.status(500).send('Failed to read Gmail. Check the server logs for details.');
     }
   });
 
-  app.get('/api/profile/:email', async (req, res) => {
+  app.get('/api/profile/:email', async (req: Request, res: Response) => {
     const email = (req.params.email || '').trim().toLowerCase();
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
@@ -857,7 +892,7 @@ async function start() {
         return res.status(404).json({ error: 'Profile not found' });
       }
       return res.json({ profile: resource });
-    } catch (err) {
+    } catch (err: any) {
       if (err.code === 404) {
         return res.status(404).json({ error: 'Profile not found' });
       }
@@ -866,9 +901,9 @@ async function start() {
     }
   });
 
-  app.post('/api/profile', async (req, res) => {
-    const name = (req.body.name || '').trim();
-    const email = (req.body.email || '').trim().toLowerCase();
+  app.post('/api/profile', async (req: Request, res: Response) => {
+    const name = ((req.body as any).name || '').trim();
+    const email = ((req.body as any).email || '').trim().toLowerCase();
 
     if (!name || !email) {
       return res.status(400).json({ error: 'Name and email are required' });
@@ -884,7 +919,7 @@ async function start() {
     }
   });
 
-  app.post('/api/gmail/fetch', async (req, res) => {
+  app.post('/api/gmail/fetch', async (req: AuthedRequest, res: Response) => {
     if (!req.userSession) {
       return res.status(401).json({ error: 'Not signed in' });
     }
@@ -895,7 +930,7 @@ async function start() {
     try {
       const result = await fetchAndStoreGmailEmails(gmailContainer, null, jobsContainer, ownerEmail);
       return res.json({ ok: true, result });
-    } catch (err) {
+    } catch (err: any) {
       if (err.code === 'NO_GMAIL_TOKENS') {
         return res.status(409).json({
           error: 'Gmail access not configured. Please connect your Google account.',
@@ -907,29 +942,41 @@ async function start() {
     }
   });
 
-  app.get('/api/jobs', async (req, res) => {
+  app.get('/api/jobs', async (req: AuthedRequest, res: Response) => {
     if (!req.userSession) {
       return res.status(401).json({ error: 'Not signed in' });
     }
-    const sortParam = (req.query.sort || '').toLowerCase();
+    const sortParam = ((req.query.sort as string) || '').toLowerCase();
     const sortByUpdated = sortParam === 'updated';
-    const orderClause = sortByUpdated ? 'ORDER BY c.last_updated DESC' : 'ORDER BY c.company_name ASC';
+    const orderClause = sortByUpdated
+      ? 'ORDER BY c.last_updated DESC'
+      : 'ORDER BY c.company_name ASC';
     try {
       const ownerEmail = (req.userSession.email || '').toLowerCase();
       const querySpec = {
         query: `SELECT c.id, c.company_name, c.applied, c.rejected, c.next_steps, c.comments, c.last_updated FROM c WHERE c.owner = @owner ${orderClause}`,
         parameters: [{ name: '@owner', value: ownerEmail }],
       };
-      const { resources } = await jobsContainer.items.query(querySpec).fetchAll();
+      const { resources } = await jobsContainer.items.query<JobDoc>(querySpec).fetchAll();
       return res.json({ jobs: resources || [] });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to fetch job summaries', err);
       return res.status(500).json({ error: 'Failed to load job summaries' });
     }
   });
 
+  // Serve static client (Vite build)
+  app.use(express.static(STATIC_DIR));
+  // Catch-all for SPA routes (regex to avoid path-to-regexp wildcard parsing issues)
+  app.get(/.*/, (_req, res) => {
+    res.sendFile(path.join(STATIC_DIR, 'index.html'));
+  });
+
   app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Frontend dev (Vite): http://localhost:5173');
+    }
   });
 }
 
