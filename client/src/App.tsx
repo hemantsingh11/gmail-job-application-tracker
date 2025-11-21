@@ -278,12 +278,20 @@ export default function App() {
           </a>
         </div>
         <div className="nav-actions">
-          <button className="btn link" onClick={() => navigate('/profile')}>
-            Log in
-          </button>
-          <button className="btn primary" onClick={() => navigate('/profile')}>
-            Sign up
-          </button>
+          {user ? (
+            <button className="btn primary" onClick={() => navigate('/profile')}>
+              Go to dashboard
+            </button>
+          ) : (
+            <>
+              <button className="btn link" onClick={() => navigate('/profile')}>
+                Log in
+              </button>
+              <button className="btn primary" onClick={() => navigate('/profile')}>
+                Sign up
+              </button>
+            </>
+          )}
         </div>
       </nav>
 
@@ -293,20 +301,10 @@ export default function App() {
           <h1>
             Keep every application <span className="highlight">under control.</span>
           </h1>
-          <p className="lede">
+          <p className="lede hero-headline">
             Connect Gmail once, we classify every reply, and you get a calm view of each company
             you&apos;re talking to—no more digging through threads.
           </p>
-          <div className="action-row">
-            <button className="btn primary" onClick={() => navigate('/profile')}>
-              Go to profile
-            </button>
-            {user && (
-              <button className="btn ghost" onClick={logout}>
-                Logout
-              </button>
-            )}
-          </div>
           <div className="sub-row">
             {gmailConnected && (
               <span className="badge success">
@@ -372,57 +370,54 @@ export default function App() {
         </div>
       )}
 
-      <header className="hero one-col fade-in">
+      <header className="hero one-col fade-in compact-hero">
         <div className="hero-copy">
-          <div className="eyebrow">Job Tracker</div>
-          <h1>
-            Job inbox, <span className="highlight">sorted.</span>
-          </h1>
-          <p className="lede">
-            Connect once, then get a clean, living view of every company you&apos;re talking to—no
-            spreadsheets, no hunting through threads.
-          </p>
-          <div className="action-row">
-            {user ? (
-              <>
-                {checkingGmailConnection ? (
-                  <button className="btn" disabled>
-                    Checking Gmail…
+          <div className="hero-inline">
+            <div className="eyebrow">Inbox automations</div>
+            <div className="action-row tight-row hero-actions">
+              {user ? (
+                <>
+                  {checkingGmailConnection ? (
+                    <button className="btn" disabled>
+                      Checking Gmail…
+                    </button>
+                  ) : gmailConnected ? (
+                    <button
+                      className="btn primary"
+                      onClick={triggerGmailFetch}
+                      disabled={actionLoading}
+                    >
+                      {actionLoading ? 'Working…' : 'Fetch Gmail now'}
+                    </button>
+                  ) : (
+                    <button className="btn primary" onClick={connectGmail} disabled={actionLoading}>
+                      Connect Gmail
+                    </button>
+                  )}
+                  <button className="btn ghost" onClick={logout}>
+                    Logout
                   </button>
-                ) : gmailConnected ? (
-                  <button
-                    className="btn primary"
-                    onClick={triggerGmailFetch}
-                    disabled={actionLoading}
-                  >
-                    {actionLoading ? 'Working…' : 'Fetch Gmail now'}
-                  </button>
-                ) : (
-                  <button className="btn primary" onClick={connectGmail} disabled={actionLoading}>
-                    Connect Gmail
-                  </button>
-                )}
-                <button className="btn ghost" onClick={logout}>
-                  Logout
-                </button>
-              </>
-            ) : (
-              <div className="sign-in-block">
-                <div ref={signInButtonRef} />
-                {authError && <p className="error">{authError}</p>}
-              </div>
-            )}
+                  {gmailConnected && (
+                    <span className="badge success">
+                      <span className="badge-dot" />
+                      Gmail connected
+                    </span>
+                  )}
+                </>
+              ) : (
+                <div className="sign-in-block">
+                  <div ref={signInButtonRef} />
+                  {authError && <p className="error">{authError}</p>}
+                </div>
+              )}
+            </div>
           </div>
-          <div className="sub-row">
-            {gmailConnected && (
-              <span className="badge success">
-                <span className="badge-dot" />
-                Gmail connected
-              </span>
-            )}
-            {gmailStatus && <p className="status">{gmailStatus}</p>}
-            {gmailStatusError && <p className="error">{gmailStatusError}</p>}
-          </div>
+          {(gmailStatus || gmailStatusError) && (
+            <div className="sub-row tight-row hero-status">
+              {gmailStatus && <p className="status">{gmailStatus}</p>}
+              {gmailStatusError && <p className="error">{gmailStatusError}</p>}
+            </div>
+          )}
         </div>
       </header>
 
@@ -430,36 +425,43 @@ export default function App() {
         <div className="panel-header">
           <div>
             <p className="eyebrow">Applications</p>
-            <h2>Live view of your pipeline</h2>
+            <h2>Live view</h2>
           </div>
-          <div className="controls-row">
-            <div className="segmented">
-              <button
-                className={sort === 'company' ? 'active' : ''}
-                onClick={() => setSort('company')}
-              >
-                Company
-              </button>
-              <button
-                className={sort === 'updated' ? 'active' : ''}
-                onClick={() => setSort('updated')}
-              >
-                Last updated
-              </button>
-            </div>
-            <div className="segmented view-toggle">
-              <button
-                className={viewMode === 'cards' ? 'active' : ''}
-                onClick={() => setViewMode('cards')}
-              >
-                Cards
-              </button>
-              <button
-                className={viewMode === 'table' ? 'active' : ''}
-                onClick={() => setViewMode('table')}
-              >
-                Table
-              </button>
+          <div className="controls-row toolbox">
+            <div className="dropdown">
+              <button className="btn ghost dropdown-toggle">Sort & View</button>
+              <div className="dropdown-menu">
+                <div className="menu-section">
+                  <p className="muted small">Sort</p>
+                  <button
+                    className={sort === 'company' ? 'menu-item active' : 'menu-item'}
+                    onClick={() => setSort('company')}
+                  >
+                    Company
+                  </button>
+                  <button
+                    className={sort === 'updated' ? 'menu-item active' : 'menu-item'}
+                    onClick={() => setSort('updated')}
+                  >
+                    Last updated
+                  </button>
+                </div>
+                <div className="menu-section">
+                  <p className="muted small">View</p>
+                  <button
+                    className={viewMode === 'cards' ? 'menu-item active' : 'menu-item'}
+                    onClick={() => setViewMode('cards')}
+                  >
+                    Cards
+                  </button>
+                  <button
+                    className={viewMode === 'table' ? 'menu-item active' : 'menu-item'}
+                    onClick={() => setViewMode('table')}
+                  >
+                    Table
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

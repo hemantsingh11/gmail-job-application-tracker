@@ -95,6 +95,33 @@ body {
   text-align: center;
 }
 
+.compact-hero .hero-copy {
+  align-items: center;
+  gap: 8px;
+  flex-direction: row;
+  justify-content: space-between;
+  width: 100%;
+  padding: 16px 24px;
+}
+
+.hero.one-col .hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.hero.one-col.compact-hero .hero-copy {
+  max-width: none;
+  margin: 0;
+  align-items: stretch;
+  text-align: left;
+  padding: 20px 22px;
+  row-gap: 8px;
+}
+
 .hero-copy {
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.6);
@@ -267,6 +294,11 @@ h1 {
   line-height: 1.1;
 }
 
+h1,
+.hero-headline {
+  text-align: center;
+}
+
 h2 {
   margin: 0;
   font-size: 22px;
@@ -297,6 +329,33 @@ h4 {
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+}
+
+.hero-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.hero-actions {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.hero-actions .btn {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+.hero-actions .btn.ghost {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.hero-actions .badge {
+  white-space: nowrap;
 }
 
 .btn {
@@ -379,6 +438,15 @@ h4 {
   gap: 12px;
   align-items: center;
   margin-top: 10px;
+}
+
+.hero-status {
+  margin-top: 4px;
+}
+
+.tight-row {
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .error {
@@ -514,6 +582,10 @@ h4 {
   align-items: center;
 }
 
+.toolbox {
+  justify-content: flex-end;
+}
+
 .segmented {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -543,6 +615,64 @@ h4 {
 
 .table-wrap {
   overflow-x: auto;
+}
+
+.dropdown {
+  position: relative;
+}
+
+.dropdown-toggle {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+.dropdown-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 200px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(15, 18, 40, 0.14);
+  padding: 10px;
+  display: none;
+  z-index: 10;
+}
+
+.dropdown:hover .dropdown-menu,
+.dropdown:focus-within .dropdown-menu {
+  display: block;
+}
+
+.menu-section {
+  margin-bottom: 10px;
+}
+
+.menu-section:last-child {
+  margin-bottom: 0;
+}
+
+.menu-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  color: #0a0e1a;
+}
+
+.menu-item:hover {
+  background: #f5f7ff;
+}
+
+.menu-item.active {
+  background: #ebf2ff;
+  border-color: #cbd9ff;
+  color: #1a4fbf;
 }
 
 table {
@@ -707,5 +837,21 @@ tr:hover td {
   .btn {
     width: 100%;
     text-align: center;
+  }
+}
+
+@media (max-width: 780px) {
+  .hero-inline,
+  .hero-actions {
+    flex-wrap: wrap;
+  }
+
+  .hero-inline {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .hero-actions {
+    width: 100%;
   }
 }
