@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 type User = {
   name: string;
@@ -38,6 +38,7 @@ const loadGisScript = (): Promise<void> => {
 };
 
 export default function App() {
+  const [route, setRoute] = useState<string>(window.location.pathname || '/');
   const [user, setUser] = useState<User | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [googleClientId, setGoogleClientId] = useState<string | null>(null);
@@ -50,21 +51,18 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [gmailConnected, setGmailConnected] = useState<boolean | null>(null);
   const [gmailStatusError, setGmailStatusError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const signInButtonRef = useRef<HTMLDivElement>(null);
 
-  const totals = useMemo(() => {
-    return jobs.reduce(
-      (acc, job) => {
-        acc.applied += job.applied || 0;
-        acc.rejected += job.rejected || 0;
-        acc.next_steps += job.next_steps || 0;
-        return acc;
-      },
-      { applied: 0, rejected: 0, next_steps: 0 }
-    );
-  }, [jobs]);
-
   const checkingGmailConnection = user && gmailConnected === null;
+  const hasJobs = jobs.length > 0;
+  const isProfile = route.startsWith('/profile');
+
+  const navigate = (path: string) => {
+    if (path === route) return;
+    window.history.pushState({}, '', path);
+    setRoute(path);
+  };
 
   const ensureConfig = async () => {
     if (googleClientId) return googleClientId;
@@ -78,6 +76,7 @@ export default function App() {
   };
 
   const renderGoogleButton = async () => {
+    if (!isProfile) return;
     try {
       const clientId = await ensureConfig();
       await loadGisScript();
@@ -100,6 +99,7 @@ export default function App() {
               throw new Error(data.error || 'Failed to sign in');
             }
             setUser(data.user);
+            navigate('/profile');
             setAuthError(null);
           } catch (err: any) {
             setAuthError(err.message || 'Failed to sign in');
@@ -143,10 +143,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user && !loadingUser) {
+    if (!user && !loadingUser && isProfile) {
       renderGoogleButton();
     }
-  }, [user, loadingUser]);
+  }, [user, loadingUser, isProfile]);
 
   const loadGmailConnection = async () => {
     if (!user) return;
@@ -183,19 +183,19 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user) {
+    if (user && isProfile) {
       loadJobs(sort);
     }
-  }, [user, sort]);
+  }, [user, sort, isProfile]);
 
   useEffect(() => {
-    if (user) {
+    if (user && isProfile) {
       loadGmailConnection();
     } else {
       setGmailConnected(null);
       setGmailStatusError(null);
     }
-  }, [user]);
+  }, [user, isProfile]);
 
   const triggerGmailFetch = async () => {
     if (!gmailConnected) {
@@ -239,6 +239,7 @@ export default function App() {
       setJobs([]);
       setGmailConnected(null);
       setGmailStatusError(null);
+      navigate('/');
     }
   };
 
@@ -249,116 +250,189 @@ export default function App() {
       .join('\n');
   };
 
-  return (
-    <div className="page">
-      <div className="gradient-bg" />
-      <div className="page-inner">
-        <header className="hero">
-          <div className="hero-copy">
-            <div className="eyebrow">Job Tracker</div>
-            <h1>
-              Stay on top of your job emails
-              <span className="highlight"> effortlessly</span>
-            </h1>
-            <p className="lede">
-              Connect Gmail, auto-classify responses, and track your applications without a
-              spreadsheet.
+  useEffect(() => {
+    const handler = () => setRoute(window.location.pathname || '/');
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+  }, []);
+
+  const marketingPage = (
+    <>
+      <nav className="top-nav fade-in">
+        <div className="brand">
+          <div className="brand-mark">JT</div>
+          <span>Job Tracker</span>
+        </div>
+        <div className="nav-links">
+          <a href="#" onClick={(e) => e.preventDefault()}>
+            Features
+          </a>
+          <a href="#" onClick={(e) => e.preventDefault()}>
+            How it works
+          </a>
+          <a href="#" onClick={(e) => e.preventDefault()}>
+            Pricing
+          </a>
+          <a href="#" onClick={(e) => e.preventDefault()}>
+            Support
+          </a>
+        </div>
+        <div className="nav-actions">
+          <button className="btn link" onClick={() => navigate('/profile')}>
+            Log in
+          </button>
+          <button className="btn primary" onClick={() => navigate('/profile')}>
+            Sign up
+          </button>
+        </div>
+      </nav>
+
+      <header className="hero one-col fade-in">
+        <div className="hero-copy">
+          <div className="eyebrow">Built for focused job searches</div>
+          <h1>
+            Keep every application <span className="highlight">under control.</span>
+          </h1>
+          <p className="lede">
+            Connect Gmail once, we classify every reply, and you get a calm view of each company
+            you&apos;re talking to—no more digging through threads.
+          </p>
+          <div className="action-row">
+            <button className="btn primary" onClick={() => navigate('/profile')}>
+              Go to profile
+            </button>
+            {user && (
+              <button className="btn ghost" onClick={logout}>
+                Logout
+              </button>
+            )}
+          </div>
+          <div className="sub-row">
+            {gmailConnected && (
+              <span className="badge success">
+                <span className="badge-dot" />
+                Gmail connected
+              </span>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <section className="steps fade-in">
+        <div className="step-card pill-row hero-bullets">
+          <div className="hero-bullet">
+            <span className="check">✓</span> Secure Gmail connect
+          </div>
+          <div className="hero-bullet">
+            <span className="check">✓</span> Auto-classified responses
+          </div>
+          <div className="hero-bullet">
+            <span className="check">✓</span> Per-company rollups
+          </div>
+          <div className="hero-bullet">
+            <span className="check">✓</span> Nightly + on-demand sync
+          </div>
+        </div>
+
+        <div className="social-proof">
+          <div className="avatar-stack">
+            <span className="avatar-dot">A</span>
+            <span className="avatar-dot">L</span>
+            <span className="avatar-dot">S</span>
+            <span className="avatar-dot">M</span>
+            <span className="avatar-dot">R</span>
+          </div>
+          <div>
+            <p className="quote">
+              “I finally know exactly where each company stands without digging through my inbox.”
             </p>
-            <div className="action-row">
-              {user ? (
-                <>
-                  {checkingGmailConnection ? (
-                    <button className="btn" disabled>
-                      Checking Gmail connection…
-                    </button>
-                  ) : gmailConnected ? (
-                    <>
-                      <button
-                        className="btn primary"
-                        onClick={triggerGmailFetch}
-                        disabled={actionLoading}
-                      >
-                        {actionLoading ? 'Working…' : 'Fetch Gmail now'}
-                      </button>
-                      <span className="badge success">
-                        <span className="badge-dot" />
-                        Gmail connected
-                      </span>
-                    </>
-                  ) : (
-                    <button
-                      className="btn primary"
-                      onClick={connectGmail}
-                      disabled={actionLoading}
-                    >
-                      Connect Gmail to start
-                    </button>
-                  )}
-                  <button className="btn ghost" onClick={logout}>
-                    Logout
+            <p className="muted small">Made for people running fast job searches.</p>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+
+  const profilePage = (
+    <>
+      {user && gmailConnected === false && (
+        <div className="inline-banner warning">
+          <div>
+            <p className="label">Onboarding</p>
+            <p className="title">Connect Gmail to start classifying</p>
+            <p className="muted small">
+              We fetch only your job-related messages and keep refresh tokens in your Key Vault.
+            </p>
+          </div>
+          <div className="banner-actions">
+            <button className="btn primary" onClick={connectGmail} disabled={actionLoading}>
+              Connect Gmail
+            </button>
+          </div>
+        </div>
+      )}
+
+      <header className="hero one-col fade-in">
+        <div className="hero-copy">
+          <div className="eyebrow">Job Tracker</div>
+          <h1>
+            Job inbox, <span className="highlight">sorted.</span>
+          </h1>
+          <p className="lede">
+            Connect once, then get a clean, living view of every company you&apos;re talking to—no
+            spreadsheets, no hunting through threads.
+          </p>
+          <div className="action-row">
+            {user ? (
+              <>
+                {checkingGmailConnection ? (
+                  <button className="btn" disabled>
+                    Checking Gmail…
                   </button>
-                </>
-              ) : (
-                <div className="sign-in-block">
-                  <div ref={signInButtonRef} />
-                  {authError && <p className="error">{authError}</p>}
-                </div>
-              )}
-            </div>
+                ) : gmailConnected ? (
+                  <button
+                    className="btn primary"
+                    onClick={triggerGmailFetch}
+                    disabled={actionLoading}
+                  >
+                    {actionLoading ? 'Working…' : 'Fetch Gmail now'}
+                  </button>
+                ) : (
+                  <button className="btn primary" onClick={connectGmail} disabled={actionLoading}>
+                    Connect Gmail
+                  </button>
+                )}
+                <button className="btn ghost" onClick={logout}>
+                  Logout
+                </button>
+              </>
+            ) : (
+              <div className="sign-in-block">
+                <div ref={signInButtonRef} />
+                {authError && <p className="error">{authError}</p>}
+              </div>
+            )}
+          </div>
+          <div className="sub-row">
+            {gmailConnected && (
+              <span className="badge success">
+                <span className="badge-dot" />
+                Gmail connected
+              </span>
+            )}
             {gmailStatus && <p className="status">{gmailStatus}</p>}
             {gmailStatusError && <p className="error">{gmailStatusError}</p>}
           </div>
-          <div className="hero-card">
-            <div className="card-header">
-              <div className="dot green" />
-              <div className="dot amber" />
-              <div className="dot blue" />
-            </div>
-            {user ? (
-              <div className="profile">
-                {user.picture ? (
-                  <img className="avatar" src={user.picture} alt={user.name} />
-                ) : (
-                  <div className="avatar placeholder">{user.name?.[0] || '?'}</div>
-                )}
-                <div>
-                  <div className="label">Signed in</div>
-                  <div className="title">{user.name || user.email}</div>
-                  <div className="muted">{user.email}</div>
-                </div>
-              </div>
-            ) : (
-              <div className="profile skeleton">
-                <div className="avatar placeholder" />
-                <div>
-                  <div className="skeleton-line short" />
-                  <div className="skeleton-line" />
-                </div>
-              </div>
-            )}
-            <div className="stats">
-              <div className="stat">
-                <div className="label">Applied</div>
-                <div className="stat-value">{totals.applied}</div>
-              </div>
-              <div className="stat">
-                <div className="label">Rejections</div>
-                <div className="stat-value">{totals.rejected}</div>
-              </div>
-              <div className="stat">
-                <div className="label">Next steps</div>
-                <div className="stat-value">{totals.next_steps}</div>
-              </div>
-            </div>
-          </div>
-        </header>
+        </div>
+      </header>
 
-        <main className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Applications</p>
-              <h2>Per-company summary</h2>
-            </div>
+      <main className="panel scrollable fade-in">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Applications</p>
+            <h2>Live view of your pipeline</h2>
+          </div>
+          <div className="controls-row">
             <div className="segmented">
               <button
                 className={sort === 'company' ? 'active' : ''}
@@ -373,54 +447,127 @@ export default function App() {
                 Last updated
               </button>
             </div>
-          </div>
-
-          {!user && !loadingUser && (
-            <div className="empty">Sign in to see your tracked applications.</div>
-          )}
-          {jobsLoading && user && <div className="empty">Loading jobs…</div>}
-          {jobsError && <div className="error">{jobsError}</div>}
-          {!jobsLoading && user && jobs.length === 0 && !jobsError && (
-            <div className="empty">No job applications tracked yet.</div>
-          )}
-
-          {user && jobs.length > 0 && (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Company</th>
-                    <th>Applied</th>
-                    <th>Rejected</th>
-                    <th>Next steps</th>
-                    <th>Last updated</th>
-                    <th>Comments</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {jobs.map((job) => (
-                    <tr key={job.id}>
-                      <td>{job.company_name || ''}</td>
-                      <td>
-                        <span className="pill neutral">{job.applied || 0}</span>
-                      </td>
-                      <td>
-                        <span className="pill danger">{job.rejected || 0}</span>
-                      </td>
-                      <td>
-                        <span className="pill success">{job.next_steps || 0}</span>
-                      </td>
-                      <td>{job.last_updated || ''}</td>
-                      <td>
-                        <div className="comment-text">{renderComments(job.comments || [])}</div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="segmented view-toggle">
+              <button
+                className={viewMode === 'cards' ? 'active' : ''}
+                onClick={() => setViewMode('cards')}
+              >
+                Cards
+              </button>
+              <button
+                className={viewMode === 'table' ? 'active' : ''}
+                onClick={() => setViewMode('table')}
+              >
+                Table
+              </button>
             </div>
-          )}
-        </main>
+          </div>
+        </div>
+
+        {!user && !loadingUser && (
+          <div className="empty">Sign in to see your tracked applications.</div>
+        )}
+        {jobsLoading && user && <div className="empty">Loading jobs…</div>}
+        {jobsError && <div className="error">{jobsError}</div>}
+        {!jobsLoading && user && jobs.length === 0 && !jobsError && (
+          <div className="empty">
+            <h3>Nothing yet</h3>
+            <p>Connect Gmail to pull in your first batch of applications.</p>
+            {!gmailConnected && (
+              <button className="btn primary" onClick={connectGmail}>
+                Connect Gmail
+              </button>
+            )}
+          </div>
+        )}
+
+        {user && hasJobs && viewMode === 'cards' && (
+          <div className="card-grid">
+            {jobs.map((job) => (
+              <article key={job.id} className="job-card">
+                <div className="job-card-top">
+                  <div className="company-mark">
+                    <span>{job.company_name?.[0] || '?'}</span>
+                  </div>
+                  <div>
+                    <p className="label">Company</p>
+                    <h4>{job.company_name || ''}</h4>
+                    <p className="muted small">Last updated {job.last_updated || '—'}</p>
+                  </div>
+                </div>
+                <div className="pill-row">
+                  <span className="pill neutral">Applied {job.applied || 0}</span>
+                  <span className="pill danger">Rejected {job.rejected || 0}</span>
+                  <span className="pill success">Next steps {job.next_steps || 0}</span>
+                </div>
+                <div className="notes">
+                  <p className="label">Notes</p>
+                  {job.comments && job.comments.length > 0 ? (
+                    <ul>
+                      {job.comments.slice(0, 2).map((c, idx) => (
+                        <li key={idx}>
+                          <span className="muted small">{c.date}</span>
+                          <div>{c.note}</div>
+                        </li>
+                      ))}
+                      {job.comments.length > 2 && (
+                        <li className="muted small">+{job.comments.length - 2} more</li>
+                      )}
+                    </ul>
+                  ) : (
+                    <p className="muted">No notes yet.</p>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+
+        {user && hasJobs && viewMode === 'table' && (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Company</th>
+                  <th>Applied</th>
+                  <th>Rejected</th>
+                  <th>Next steps</th>
+                  <th>Last updated</th>
+                  <th>Comments</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((job) => (
+                  <tr key={job.id}>
+                    <td>{job.company_name || ''}</td>
+                    <td>
+                      <span className="pill neutral">{job.applied || 0}</span>
+                    </td>
+                    <td>
+                      <span className="pill danger">{job.rejected || 0}</span>
+                    </td>
+                    <td>
+                      <span className="pill success">{job.next_steps || 0}</span>
+                    </td>
+                    <td>{job.last_updated || ''}</td>
+                    <td>
+                      <div className="comment-text">{renderComments(job.comments || [])}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </main>
+    </>
+  );
+
+  return (
+    <div className="page">
+      <div className="gradient-bg" />
+      <div className="page-inner">
+        {isProfile ? profilePage : marketingPage}
       </div>
     </div>
   );
