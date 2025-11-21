@@ -148,6 +148,27 @@ h2 {
   background: rgba(255, 255, 255, 0.7);
 }
 
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #e5f8f0;
+  color: #0f5132;
+  font-weight: 700;
+  border: 1px solid #b7ead4;
+  box-shadow: 0 6px 15px rgba(15, 15, 18, 0.08);
+}
+
+.badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #29c076;
+  box-shadow: 0 0 0 4px rgba(41, 192, 118, 0.15);
+}
+
 .sign-in-block {
   display: flex;
   flex-direction: column;

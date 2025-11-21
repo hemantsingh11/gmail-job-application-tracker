@@ -942,6 +942,24 @@ async function start(): Promise<void> {
     }
   });
 
+  app.get('/api/gmail/status', async (req: AuthedRequest, res: Response) => {
+    if (!req.userSession) {
+      return res.status(401).json({ error: 'Not signed in' });
+    }
+    const ownerEmail = (req.userSession.email || '').toLowerCase();
+    if (!ownerEmail) {
+      return res.status(400).json({ error: 'Missing user email' });
+    }
+    try {
+      const tokens = (await tokenStore.loadTokens(ownerEmail)) || {};
+      const connected = Object.keys(tokens).length > 0;
+      return res.json({ connected });
+    } catch (err: any) {
+      console.error('Failed to check Gmail status', err.message || err);
+      return res.status(500).json({ error: 'Failed to check Gmail connection' });
+    }
+  });
+
   app.get('/api/jobs', async (req: AuthedRequest, res: Response) => {
     if (!req.userSession) {
       return res.status(401).json({ error: 'Not signed in' });

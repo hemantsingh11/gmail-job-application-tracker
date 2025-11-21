@@ -48,6 +48,8 @@ export default function App() {
   const [gmailStatus, setGmailStatus] = useState<string>('');
   const [actionLoading, setActionLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [gmailConnected, setGmailConnected] = useState<boolean | null>(null);
+  const [gmailStatusError, setGmailStatusError] = useState<string | null>(null);
   const signInButtonRef = useRef<HTMLDivElement>(null);
 
   const totals = useMemo(() => {
@@ -61,6 +63,8 @@ export default function App() {
       { applied: 0, rejected: 0, next_steps: 0 }
     );
   }, [jobs]);
+
+  const checkingGmailConnection = user && gmailConnected === null;
 
   const ensureConfig = async () => {
     if (googleClientId) return googleClientId;
@@ -144,6 +148,22 @@ export default function App() {
     }
   }, [user, loadingUser]);
 
+  const loadGmailConnection = async () => {
+    if (!user) return;
+    setGmailStatusError(null);
+    try {
+      const res = await fetch('/api/gmail/status');
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to check Gmail connection');
+      }
+      setGmailConnected(Boolean(data.connected));
+    } catch (err: any) {
+      setGmailConnected(false);
+      setGmailStatusError(err.message || 'Failed to check Gmail connection');
+    }
+  };
+
   const loadJobs = async (sortOrder: 'company' | 'updated') => {
     setJobsLoading(true);
     setJobsError(null);
@@ -168,7 +188,21 @@ export default function App() {
     }
   }, [user, sort]);
 
+  useEffect(() => {
+    if (user) {
+      loadGmailConnection();
+    } else {
+      setGmailConnected(null);
+      setGmailStatusError(null);
+    }
+  }, [user]);
+
   const triggerGmailFetch = async () => {
+    if (!gmailConnected) {
+      setGmailStatus('Please connect your Gmail account first.');
+      connectGmail();
+      return;
+    }
     setActionLoading(true);
     setGmailStatus('Fetching Gmail...');
     try {
@@ -203,6 +237,8 @@ export default function App() {
     } finally {
       setUser(null);
       setJobs([]);
+      setGmailConnected(null);
+      setGmailStatusError(null);
     }
   };
 
@@ -231,16 +267,33 @@ export default function App() {
             <div className="action-row">
               {user ? (
                 <>
-                  <button
-                    className="btn primary"
-                    onClick={triggerGmailFetch}
-                    disabled={actionLoading}
-                  >
-                    {actionLoading ? 'Working…' : 'Fetch Gmail now'}
-                  </button>
-                  <button className="btn ghost" onClick={connectGmail}>
-                    Connect Gmail account
-                  </button>
+                  {checkingGmailConnection ? (
+                    <button className="btn" disabled>
+                      Checking Gmail connection…
+                    </button>
+                  ) : gmailConnected ? (
+                    <>
+                      <button
+                        className="btn primary"
+                        onClick={triggerGmailFetch}
+                        disabled={actionLoading}
+                      >
+                        {actionLoading ? 'Working…' : 'Fetch Gmail now'}
+                      </button>
+                      <span className="badge success">
+                        <span className="badge-dot" />
+                        Gmail connected
+                      </span>
+                    </>
+                  ) : (
+                    <button
+                      className="btn primary"
+                      onClick={connectGmail}
+                      disabled={actionLoading}
+                    >
+                      Connect Gmail to start
+                    </button>
+                  )}
                   <button className="btn ghost" onClick={logout}>
                     Logout
                   </button>
@@ -253,6 +306,7 @@ export default function App() {
               )}
             </div>
             {gmailStatus && <p className="status">{gmailStatus}</p>}
+            {gmailStatusError && <p className="error">{gmailStatusError}</p>}
           </div>
           <div className="hero-card">
             <div className="card-header">
