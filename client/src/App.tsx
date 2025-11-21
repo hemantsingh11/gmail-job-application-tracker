@@ -16,6 +16,30 @@ type JobSummary = {
   last_updated: string;
 };
 
+type GmailEmail = {
+  id: string;
+  threadId?: string;
+  gmailAccount?: string;
+  owner: string;
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+  snippet: string;
+  body?: string;
+  labelIds?: string[];
+  fetchedAt: string;
+  internalDate: number;
+  classification?: {
+    is_job_related: boolean;
+    status: string;
+    summary: string;
+    company_name: string;
+  };
+  classifiedAt?: string;
+  createdAt?: string;
+};
+
 declare global {
   interface Window {
     google?: any;
@@ -52,16 +76,29 @@ export default function App() {
   const [gmailConnected, setGmailConnected] = useState<boolean | null>(null);
   const [gmailStatusError, setGmailStatusError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
+  const [companyEmails, setCompanyEmails] = useState<GmailEmail[]>([]);
+  const [companyEmailsLoading, setCompanyEmailsLoading] = useState(false);
+  const [companyEmailsError, setCompanyEmailsError] = useState<string | null>(null);
+  const [openEmailIds, setOpenEmailIds] = useState<Set<string>>(new Set());
   const signInButtonRef = useRef<HTMLDivElement>(null);
 
   const checkingGmailConnection = user && gmailConnected === null;
   const hasJobs = jobs.length > 0;
   const isProfile = route.startsWith('/profile');
+  const isCompany = route.startsWith('/company/');
+  const currentCompanySlug = isCompany ? route.replace('/company/', '') : '';
+  const currentCompanyName = currentCompanySlug ? decodeURIComponent(currentCompanySlug) : '';
+  const needsAuthPage = isProfile || isCompany;
 
   const navigate = (path: string) => {
     if (path === route) return;
     window.history.pushState({}, '', path);
     setRoute(path);
+  };
+
+  const navigateToCompany = (companyName: string) => {
+    if (!companyName) return;
+    navigate(`/company/${encodeURIComponent(companyName)}`);
   };
 
   const ensureConfig = async () => {
@@ -76,7 +113,7 @@ export default function App() {
   };
 
   const renderGoogleButton = async () => {
-    if (!isProfile) return;
+    if (!needsAuthPage) return;
     try {
       const clientId = await ensureConfig();
       await loadGisScript();
@@ -146,7 +183,10 @@ export default function App() {
     if (!user && !loadingUser && isProfile) {
       renderGoogleButton();
     }
-  }, [user, loadingUser, isProfile]);
+    if (!user && !loadingUser && isCompany) {
+      renderGoogleButton();
+    }
+  }, [user, loadingUser, isProfile, isCompany]);
 
   const loadGmailConnection = async () => {
     if (!user) return;
@@ -196,6 +236,37 @@ export default function App() {
       setGmailStatusError(null);
     }
   }, [user, isProfile]);
+
+  const loadCompanyEmails = async (companyName: string) => {
+    if (!companyName) return;
+    setCompanyEmailsLoading(true);
+    setCompanyEmailsError(null);
+    setOpenEmailIds(new Set());
+    try {
+      const res = await fetch(`/api/gmail/company?name=${encodeURIComponent(companyName)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to load company emails');
+      }
+      setCompanyEmails(data.emails || []);
+    } catch (err: any) {
+      setCompanyEmailsError(err.message || 'Failed to load company emails');
+      setCompanyEmails([]);
+    } finally {
+      setCompanyEmailsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user && currentCompanyName) {
+      loadCompanyEmails(currentCompanyName);
+    } else {
+      setCompanyEmails([]);
+      setCompanyEmailsError(null);
+      setCompanyEmailsLoading(false);
+      setOpenEmailIds(new Set());
+    }
+  }, [user, currentCompanyName]);
 
   const triggerGmailFetch = async () => {
     if (!gmailConnected) {
@@ -248,6 +319,28 @@ export default function App() {
     return comments
       .map((c) => `${c.date}: ${c.note}`)
       .join('\n');
+  };
+
+  const gmailLinkForEmail = (email: GmailEmail) => {
+    const targetId = email.threadId || email.id;
+    if (!targetId) return '';
+    const authUser = email.gmailAccount || email.owner || user?.email || '';
+    const base = authUser
+      ? `https://mail.google.com/mail/?authuser=${encodeURIComponent(authUser)}`
+      : 'https://mail.google.com/mail/u/0';
+    return `${base}#all/${encodeURIComponent(targetId)}`;
+  };
+
+  const toggleEmailOpen = (emailId: string) => {
+    setOpenEmailIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(emailId)) {
+        next.delete(emailId);
+      } else {
+        next.add(emailId);
+      }
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -486,7 +579,19 @@ export default function App() {
         {user && hasJobs && viewMode === 'cards' && (
           <div className="card-grid">
             {jobs.map((job) => (
-              <article key={job.id} className="job-card">
+              <article
+                key={job.id}
+                className="job-card clickable"
+                role="button"
+                tabIndex={0}
+                onClick={() => navigateToCompany(job.company_name)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    navigateToCompany(job.company_name);
+                  }
+                }}
+              >
                 <div className="job-card-top">
                   <div className="company-mark">
                     <span>{job.company_name?.[0] || '?'}</span>
@@ -540,7 +645,11 @@ export default function App() {
               </thead>
               <tbody>
                 {jobs.map((job) => (
-                  <tr key={job.id}>
+                  <tr
+                    key={job.id}
+                    className="clickable-row"
+                    onClick={() => navigateToCompany(job.company_name)}
+                  >
                     <td>{job.company_name || ''}</td>
                     <td>
                       <span className="pill neutral">{job.applied || 0}</span>
@@ -565,11 +674,106 @@ export default function App() {
     </>
   );
 
+  const companyPage = (
+    <>
+      <nav className="top-nav fade-in">
+        <div className="brand" onClick={() => navigate('/')}>
+          <div className="brand-mark">JT</div>
+          <span>Job Tracker</span>
+        </div>
+        <div className="nav-actions">
+          <button className="btn ghost" onClick={() => navigate('/profile')}>
+            Back to dashboard
+          </button>
+        </div>
+      </nav>
+
+      <header className="hero one-col fade-in compact-hero">
+        <div className="hero-copy">
+          <div className="hero-inline">
+            <div>
+              <div className="eyebrow">Company</div>
+              <h2>{currentCompanyName || 'Company'}</h2>
+            </div>
+            <div className="action-row">
+              <button className="btn ghost" onClick={() => navigate('/profile')}>
+                ← Overview
+              </button>
+            </div>
+          </div>
+          {companyEmailsError && <p className="error">{companyEmailsError}</p>}
+          {!user && !loadingUser && (
+            <div className="sign-in-block">
+              <div ref={signInButtonRef} />
+              {authError && <p className="error">{authError}</p>}
+            </div>
+          )}
+        </div>
+      </header>
+
+      <main className="panel scrollable fade-in">
+        {!user && loadingUser && <div className="empty">Checking session…</div>}
+        {user && companyEmailsLoading && <div className="empty">Loading emails…</div>}
+        {user && !companyEmailsLoading && !companyEmails.length && !companyEmailsError && (
+          <div className="empty">No classified emails for this company yet.</div>
+        )}
+        {user && !companyEmailsLoading && companyEmails.length > 0 && (
+          <div className="accordion">
+            {companyEmails.map((email) => {
+              const isOpen = openEmailIds.has(email.id);
+              const gmailLink = gmailLinkForEmail(email);
+              return (
+                <article key={email.id} className={isOpen ? 'accordion-item open' : 'accordion-item'}>
+                  <button className="accordion-toggle" onClick={() => toggleEmailOpen(email.id)}>
+                    <div className="accordion-meta">
+                      <p className="muted small">{email.date}</p>
+                      <p className="label">{email.classification?.status || 'email'}</p>
+                    </div>
+                    <div className="accordion-title">
+                      <h4>{email.subject || '(No subject)'}</h4>
+                      <p className="muted small">From {email.from || 'Unknown sender'}</p>
+                    </div>
+                    <div className="accordion-actions">
+                      {gmailLink && (
+                        <a
+                          href={gmailLink}
+                          className="btn ghost"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Open in Gmail
+                        </a>
+                      )}
+                      <span className="chevron">{isOpen ? '▲' : '▼'}</span>
+                    </div>
+                  </button>
+                  {isOpen && (
+                    <div className="accordion-body">
+                      <p className="muted small">
+                        {email.classification?.summary || email.snippet || 'No summary available.'}
+                      </p>
+                      {(email.body || email.snippet) && (
+                        <pre className="email-body">
+                          {(email.body || email.snippet || '').slice(0, 2000)}
+                        </pre>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    </>
+  );
+
   return (
     <div className="page">
       <div className="gradient-bg" />
       <div className="page-inner">
-        {isProfile ? profilePage : marketingPage}
+        {isCompany ? companyPage : isProfile ? profilePage : marketingPage}
       </div>
     </div>
   );

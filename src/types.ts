@@ -16,7 +16,9 @@ export interface ClassificationResult {
 
 export interface GmailEmailDoc {
   id: string;
+  threadId?: string;
   owner: string;
+  gmailAccount?: string;
   from: string;
   to: string;
   subject: string;

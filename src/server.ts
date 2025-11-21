@@ -17,6 +17,52 @@ import type {
 } from './types';
 import * as tokenStore from './gmailTokenStore';
 import * as gmailStateStore from './gmailStateStore';
+import { filterEmailsByCompany } from './companyFilter';
+
+async function logGmailDiagnostics(
+  gmailContainer: Container,
+  ownerEmail: string,
+  companyName: string
+): Promise<void> {
+  const diagnostics: Array<{ label: string; query: string; parameters?: any[] }> = [
+    {
+      label: 'Non-string owner',
+      query: 'SELECT TOP 3 c.id, c.owner FROM c WHERE NOT IS_STRING(c.owner)',
+    },
+    {
+      label: 'Non-string company classification',
+      query:
+        'SELECT TOP 3 c.id, c.classification FROM c WHERE c.owner = @owner AND (NOT IS_DEFINED(c.classification) OR NOT IS_OBJECT(c.classification) OR NOT IS_DEFINED(c.classification.company_name) OR NOT IS_STRING(c.classification.company_name))',
+      parameters: [{ name: '@owner', value: ownerEmail }],
+    },
+    {
+      label: 'Missing internalDate',
+      query:
+        'SELECT TOP 3 c.id, c.internalDate FROM c WHERE c.owner = @owner AND (NOT IS_DEFINED(c.internalDate) OR NOT IS_NUMBER(c.internalDate))',
+      parameters: [{ name: '@owner', value: ownerEmail }],
+    },
+    {
+      label: 'Sample classified company',
+      query:
+        'SELECT TOP 3 c.id, c.classification FROM c WHERE c.owner = @owner AND IS_DEFINED(c.classification.company_name) AND c.classification.company_name = @company',
+      parameters: [
+        { name: '@owner', value: ownerEmail },
+        { name: '@company', value: companyName },
+      ],
+    },
+  ];
+
+  for (const diag of diagnostics) {
+    try {
+      const { resources } = await gmailContainer.items
+        .query(diag, { maxItemCount: 3 })
+        .fetchAll();
+      console.log(`[Diag:${diag.label}]`, resources);
+    } catch (err: any) {
+      console.error(`[Diag failed:${diag.label}]`, err.message || err);
+    }
+  }
+}
 
 dotenv.config();
 
@@ -582,7 +628,9 @@ async function fetchAndStoreGmailEmails(
       const internalDateMs = Number(data.internalDate) || Date.now();
       const doc: GmailEmailDoc = {
         id: data.id || '',
+        threadId: data.threadId || message.threadId || '',
         owner: ownerEmail,
+        gmailAccount: gmailAccountEmail,
         from: extractHeader(headers, 'From') || 'unknown',
         to: extractHeader(headers, 'To') || '',
         subject: extractHeader(headers, 'Subject') || '(No subject)',
@@ -980,6 +1028,53 @@ async function start(): Promise<void> {
     } catch (err: any) {
       console.error('Failed to fetch job summaries', err);
       return res.status(500).json({ error: 'Failed to load job summaries' });
+    }
+  });
+
+  app.get('/api/gmail/company', async (req: AuthedRequest, res: Response) => {
+    if (!req.userSession) {
+      return res.status(401).json({ error: 'Not signed in' });
+    }
+    if (!gmailContainer) {
+      return res.status(503).json({ error: 'Gmail storage not ready' });
+    }
+    const ownerEmail = (req.userSession.email || '').toLowerCase();
+    const companyName = ((req.query.name as string) || '').trim();
+    if (!ownerEmail) {
+      return res.status(400).json({ error: 'Missing user email' });
+    }
+    if (!companyName) {
+      return res.status(400).json({ error: 'Company name is required' });
+    }
+    try {
+      // Use readAll on the partition to avoid Cosmos errors from malformed docs on projection.
+      const { resources } = await gmailContainer.items
+        .readAll<GmailEmailDoc>({ partitionKey: ownerEmail })
+        .fetchAll();
+      const filtered = filterEmailsByCompany(resources || [], companyName).sort((a, b) => {
+        const aDate = typeof a.internalDate === 'number' ? a.internalDate : 0;
+        const bDate = typeof b.internalDate === 'number' ? b.internalDate : 0;
+        return bDate - aDate;
+      });
+      return res.json({ emails: filtered });
+    } catch (err: any) {
+      const errorInfo = {
+        message: err.message || String(err),
+        code: err.code,
+        statusCode: err.statusCode,
+        substatus: err.substatus,
+        activityId: err.activityId,
+        body: err.body,
+      };
+      console.error('Failed to fetch company emails', errorInfo);
+      try {
+        await logGmailDiagnostics(gmailContainer, ownerEmail, companyName);
+      } catch (diagErr: any) {
+        console.error('Diagnostics failed', diagErr.message || diagErr);
+      }
+      return res
+        .status(500)
+        .json({ error: 'Failed to load company emails', activityId: errorInfo.activityId });
     }
   });
 
