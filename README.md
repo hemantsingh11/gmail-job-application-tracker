@@ -51,6 +51,15 @@ npm install
   ```
   Express serves `dist/server.js` and the built SPA from `client/dist` at `http://localhost:3000`.
 
+## Docker
+- Build the image: `docker build -t hemantsingh11/jobapp:latest .`
+- Run locally (expects env vars set or an env file with Cosmos, Key Vault, Google, OpenAI, and session values):  
+  `docker run --rm -p 3000:3000 --env-file .env hemantsingh11/jobapp:latest`
+- Push to Docker Hub:  
+  `docker push hemantsingh11/jobapp:latest`
+- Sharing: Docker Hub hosts the image, not the running app. Others can pull and run the image, or you can deploy it to a server (e.g., VM, Azure Container Apps) and share that server's URL/port.
+- For collaborators pulling a private image: ensure they are added as collaborators in Docker Hub, then they can `docker login`, `docker pull hemantsingh11/jobapp:latest`, and run with `docker run --rm -p 3000:3000 --env-file .env hemantsingh11/jobapp:latest` (the UI is served from the same 3000 port inside the container).
+
 ## Usage
 - Sign in with Google on the front end.
 - Click “Connect Gmail account” to complete Gmail OAuth.

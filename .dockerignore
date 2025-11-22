@@ -1,0 +1,14 @@
+node_modules
+dist
+client/dist
+npm-debug.log
+.npmrc
+.git
+.gitignore
+.DS_Store
+*.log
+tmp
+.vscode
+.idea
+.env
+.env.*

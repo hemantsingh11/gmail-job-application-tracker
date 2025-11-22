@@ -47,6 +47,44 @@ const html_to_text_1 = require("html-to-text");
 const dotenv_1 = __importDefault(require("dotenv"));
 const tokenStore = __importStar(require("./gmailTokenStore"));
 const gmailStateStore = __importStar(require("./gmailStateStore"));
+const companyFilter_1 = require("./companyFilter");
+async function logGmailDiagnostics(gmailContainer, ownerEmail, companyName) {
+    const diagnostics = [
+        {
+            label: 'Non-string owner',
+            query: 'SELECT TOP 3 c.id, c.owner FROM c WHERE NOT IS_STRING(c.owner)',
+        },
+        {
+            label: 'Non-string company classification',
+            query: 'SELECT TOP 3 c.id, c.classification FROM c WHERE c.owner = @owner AND (NOT IS_DEFINED(c.classification) OR NOT IS_OBJECT(c.classification) OR NOT IS_DEFINED(c.classification.company_name) OR NOT IS_STRING(c.classification.company_name))',
+            parameters: [{ name: '@owner', value: ownerEmail }],
+        },
+        {
+            label: 'Missing internalDate',
+            query: 'SELECT TOP 3 c.id, c.internalDate FROM c WHERE c.owner = @owner AND (NOT IS_DEFINED(c.internalDate) OR NOT IS_NUMBER(c.internalDate))',
+            parameters: [{ name: '@owner', value: ownerEmail }],
+        },
+        {
+            label: 'Sample classified company',
+            query: 'SELECT TOP 3 c.id, c.classification FROM c WHERE c.owner = @owner AND IS_DEFINED(c.classification.company_name) AND c.classification.company_name = @company',
+            parameters: [
+                { name: '@owner', value: ownerEmail },
+                { name: '@company', value: companyName },
+            ],
+        },
+    ];
+    for (const diag of diagnostics) {
+        try {
+            const { resources } = await gmailContainer.items
+                .query(diag, { maxItemCount: 3 })
+                .fetchAll();
+            console.log(`[Diag:${diag.label}]`, resources);
+        }
+        catch (err) {
+            console.error(`[Diag failed:${diag.label}]`, err.message || err);
+        }
+    }
+}
 dotenv_1.default.config();
 const COSMOS_URI = process.env.COSMOS_URI;
 const COSMOS_KEY = process.env.COSMOS_KEY;
@@ -539,7 +577,9 @@ async function fetchAndStoreGmailEmails(emailContainer, oauthClient, jobsContain
             const internalDateMs = Number(data.internalDate) || Date.now();
             const doc = {
                 id: data.id || '',
+                threadId: data.threadId || message.threadId || '',
                 owner: ownerEmail,
+                gmailAccount: gmailAccountEmail,
                 from: extractHeader(headers, 'From') || 'unknown',
                 to: extractHeader(headers, 'To') || '',
                 subject: extractHeader(headers, 'Subject') || '(No subject)',
@@ -863,6 +903,24 @@ async function start() {
             return res.status(500).json({ error: 'Failed to fetch Gmail' });
         }
     });
+    app.get('/api/gmail/status', async (req, res) => {
+        if (!req.userSession) {
+            return res.status(401).json({ error: 'Not signed in' });
+        }
+        const ownerEmail = (req.userSession.email || '').toLowerCase();
+        if (!ownerEmail) {
+            return res.status(400).json({ error: 'Missing user email' });
+        }
+        try {
+            const tokens = (await tokenStore.loadTokens(ownerEmail)) || {};
+            const connected = Object.keys(tokens).length > 0;
+            return res.json({ connected });
+        }
+        catch (err) {
+            console.error('Failed to check Gmail status', err.message || err);
+            return res.status(500).json({ error: 'Failed to check Gmail connection' });
+        }
+    });
     app.get('/api/jobs', async (req, res) => {
         if (!req.userSession) {
             return res.status(401).json({ error: 'Not signed in' });
@@ -886,6 +944,54 @@ async function start() {
             return res.status(500).json({ error: 'Failed to load job summaries' });
         }
     });
+    app.get('/api/gmail/company', async (req, res) => {
+        if (!req.userSession) {
+            return res.status(401).json({ error: 'Not signed in' });
+        }
+        if (!gmailContainer) {
+            return res.status(503).json({ error: 'Gmail storage not ready' });
+        }
+        const ownerEmail = (req.userSession.email || '').toLowerCase();
+        const companyName = (req.query.name || '').trim();
+        if (!ownerEmail) {
+            return res.status(400).json({ error: 'Missing user email' });
+        }
+        if (!companyName) {
+            return res.status(400).json({ error: 'Company name is required' });
+        }
+        try {
+            // Use readAll on the partition to avoid Cosmos errors from malformed docs on projection.
+            const { resources } = await gmailContainer.items
+                .readAll({ partitionKey: ownerEmail })
+                .fetchAll();
+            const filtered = (0, companyFilter_1.filterEmailsByCompany)(resources || [], companyName).sort((a, b) => {
+                const aDate = typeof a.internalDate === 'number' ? a.internalDate : 0;
+                const bDate = typeof b.internalDate === 'number' ? b.internalDate : 0;
+                return bDate - aDate;
+            });
+            return res.json({ emails: filtered });
+        }
+        catch (err) {
+            const errorInfo = {
+                message: err.message || String(err),
+                code: err.code,
+                statusCode: err.statusCode,
+                substatus: err.substatus,
+                activityId: err.activityId,
+                body: err.body,
+            };
+            console.error('Failed to fetch company emails', errorInfo);
+            try {
+                await logGmailDiagnostics(gmailContainer, ownerEmail, companyName);
+            }
+            catch (diagErr) {
+                console.error('Diagnostics failed', diagErr.message || diagErr);
+            }
+            return res
+                .status(500)
+                .json({ error: 'Failed to load company emails', activityId: errorInfo.activityId });
+        }
+    });
     // Serve static client (Vite build)
     app.use(express_1.default.static(STATIC_DIR));
     // Catch-all for SPA routes (regex to avoid path-to-regexp wildcard parsing issues)
@@ -894,6 +1000,9 @@ async function start() {
     });
     app.listen(PORT, () => {
         console.log(`Server running at http://localhost:${PORT}`);
+        if (process.env.NODE_ENV !== 'production') {
+            console.log('Frontend dev (Vite): http://localhost:5173');
+        }
     });
 }
 start().catch((err) => {
