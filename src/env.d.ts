@@ -8,6 +8,9 @@ declare namespace NodeJS {
     COSMOS_GMAIL_CONTAINER?: string;
     COSMOS_JOBS_DATABASE?: string;
     COSMOS_JOBS_CONTAINER?: string;
+    AZURE_TENANT_ID?: string;
+    AZURE_CLIENT_ID?: string;
+    AZURE_CLIENT_SECRET?: string;
     PORT?: string;
     GOOGLE_CLIENT_ID?: string;
     GOOGLE_CLIENT_SECRET?: string;

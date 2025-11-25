@@ -8,17 +8,18 @@ Express + TypeScript backend with Cosmos DB and a Vite + React + TypeScript SPA.
 - Scheduled Gmail ingestion at **12:45 AM Eastern** (previous day range) plus manual “Fetch Gmail now”.
 - OpenAI classification of unprocessed emails (applied/rejected/next steps/comment-only/not job related) with per-company rollups in Cosmos.
 - Per-user partitioning by signed-in Google email for Gmail messages and job counters.
+- Gmail OAuth tokens and ingestion cursors stored in Cosmos (`userdb/users`), not Key Vault.
 
 ## Stack & layout
 - Backend: `src/server.ts` (Express 5, CommonJS output), Cosmos SDK, Google APIs, node-cron.
 - Frontend: `client/` (Vite + React + TS), served from `client/dist` in prod; dev at `http://localhost:5173`.
-- Key Vault helpers: `src/gmailTokenStore.ts`, `src/gmailStateStore.ts`, `src/keyVaultClient.ts`.
+- Gmail token/state helpers now use Cosmos user container (`userdb/users`).
 - Build output: `dist/` (server) and `client/dist/` (SPA).
 
 ## Requirements
 - Node.js 18+ (tested on v24).
 - Azure Cosmos DB (SQL API) for `gmaildb/emails` and `jobsdb/applications`.
-- Azure Key Vault access for secrets/state.
+- Cosmos DB `userdb/users` for Gmail tokens and ingestion state (partition key `/userid`, store email there).
 - OpenAI API key (e.g., `gpt-4o-mini`).
 - Google OAuth client (ID + secret).
 
@@ -29,14 +30,13 @@ npm install
 ```
 2) Create `.env` from `.env.example`, set:
    - Cosmos: `COSMOS_URI`, `COSMOS_KEY`, `COSMOS_DATABASE`, `COSMOS_CONTAINER`, and optional overrides for Gmail/Jobs DB+containers.
-   - Key Vault: `KEY_VAULT_URI` and ensure `DefaultAzureCredential` works (e.g., `az login`).
+   - User store (optional overrides): `COSMOS_USER_DATABASE` (default `userdb`), `COSMOS_USER_CONTAINER` (default `users`, pk `/userid`).
    - Google OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` (default `http://localhost:3000/auth/google/callback`).
    - OpenAI: `OPENAI_API_KEY`, `EMAIL_CLASS_MODEL`.
    - Sessions: `SESSION_SECRET`, optional `SESSION_DURATION_DAYS`.
    - Cron: optional `GMAIL_CRON_SCHEDULE`.
-3) Azure Key Vault RBAC: grant the app identity secret `get/list/set` on the vault.
-4) Google OAuth setup: allow origin `http://localhost:3000` and redirect `http://localhost:3000/auth/google/callback`.
-5) First run will auto-create Cosmos containers with `/email` and `/owner` partition keys.
+3) Google OAuth setup: allow origin `http://localhost:3000` and redirect `http://localhost:3000/auth/google/callback`.
+4) First run will auto-create Cosmos containers with `/email`, `/owner`, and `/userid` partition keys where needed.
 
 ## Running
 - Dev (hot reload server + client):
