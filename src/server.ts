@@ -74,8 +74,6 @@ const COSMOS_GMAIL_DATABASE = process.env.COSMOS_GMAIL_DATABASE || 'gmaildb';
 const COSMOS_GMAIL_CONTAINER = process.env.COSMOS_GMAIL_CONTAINER || 'emails';
 const COSMOS_JOBS_DATABASE = process.env.COSMOS_JOBS_DATABASE || 'jobsdb';
 const COSMOS_JOBS_CONTAINER = process.env.COSMOS_JOBS_CONTAINER || 'applications';
-const COSMOS_USER_DATABASE = process.env.COSMOS_USER_DATABASE || 'userdb';
-const COSMOS_USER_CONTAINER = process.env.COSMOS_USER_CONTAINER || 'users';
 const PORT = Number(process.env.PORT || '3000');
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
@@ -168,23 +166,6 @@ async function initJobsCosmos(): Promise<{ client: CosmosClient; container: Cont
   const { container } = await database.containers.createIfNotExists({
     id: COSMOS_JOBS_CONTAINER,
     partitionKey: '/owner',
-  });
-
-  return { client, container };
-}
-
-async function initUserCosmos(): Promise<{ client: CosmosClient; container: Container }> {
-  requireEnv('COSMOS_URI', COSMOS_URI);
-  requireEnv('COSMOS_KEY', COSMOS_KEY);
-
-  const client = new CosmosClient({ endpoint: COSMOS_URI!, key: COSMOS_KEY! });
-  const { database } = await client.databases.createIfNotExists({
-    id: COSMOS_USER_DATABASE,
-  });
-
-  const { container } = await database.containers.createIfNotExists({
-    id: COSMOS_USER_CONTAINER,
-    partitionKey: '/userid',
   });
 
   return { client, container };
@@ -773,9 +754,6 @@ async function start(): Promise<void> {
   const { container: profileContainer } = await initCosmos();
   const { container: gmailContainer } = await initGmailCosmos();
   const { container: jobsContainer } = await initJobsCosmos();
-  const { container: userContainer } = await initUserCosmos();
-  tokenStore.setUserContainer(userContainer);
-  gmailStateStore.setUserContainer(userContainer);
   scheduleGmailJob(gmailContainer, jobsContainer);
 
   // Expose minimal public config for the frontend
