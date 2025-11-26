@@ -808,6 +808,85 @@ tr:hover td {
   gap: 16px;
 }
 
+.pricing-hero {
+  text-align: center;
+}
+
+.pricing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.pricing-panel {
+  margin-top: 10px;
+}
+
+.auth-wrapper {
+  display: grid;
+  place-items: center;
+  min-height: 50vh;
+}
+
+.auth-card {
+  max-width: 420px;
+  width: 100%;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 16px 40px rgba(15, 18, 40, 0.12);
+  text-align: center;
+  display: grid;
+  gap: 10px;
+}
+
+.auth-card .sign-in-block {
+  align-items: center;
+}
+
+.support-section {
+  display: grid;
+  place-items: center;
+  margin-top: 10px;
+}
+
+.support-section .how-card {
+  max-width: 420px;
+  width: 100%;
+}
+
+.how-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.how-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(15, 18, 40, 0.08);
+  display: grid;
+  gap: 8px;
+}
+
+.cta-block {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(82, 119, 255, 0.08), rgba(140, 91, 255, 0.08));
+  box-shadow: 0 10px 28px rgba(15, 18, 40, 0.08);
+  display: grid;
+  gap: 8px;
+  text-align: center;
+}
+
+
 .job-card {
   background: #fff;
   border: 1px solid var(--border);

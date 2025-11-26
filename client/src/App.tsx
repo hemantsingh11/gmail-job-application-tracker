@@ -86,6 +86,9 @@ export default function App() {
   const hasJobs = jobs.length > 0;
   const isProfile = route.startsWith('/profile');
   const isCompany = route.startsWith('/company/');
+  const isHowItWorks = route.startsWith('/how-it-works');
+  const isPricing = route.startsWith('/pricing');
+  const isSupport = route.startsWith('/support');
   const currentCompanySlug = isCompany ? route.replace('/company/', '') : '';
   const currentCompanyName = currentCompanySlug ? decodeURIComponent(currentCompanySlug) : '';
   const needsAuthPage = isProfile || isCompany;
@@ -357,16 +360,31 @@ export default function App() {
           <span>Job Tracker</span>
         </div>
         <div className="nav-links">
-          <a href="#" onClick={(e) => e.preventDefault()}>
-            Features
-          </a>
-          <a href="#" onClick={(e) => e.preventDefault()}>
+          <a
+            href="/how-it-works"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/how-it-works');
+            }}
+          >
             How it works
           </a>
-          <a href="#" onClick={(e) => e.preventDefault()}>
+          <a
+            href="/pricing"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/pricing');
+            }}
+          >
             Pricing
           </a>
-          <a href="#" onClick={(e) => e.preventDefault()}>
+          <a
+            href="/support"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/support');
+            }}
+          >
             Support
           </a>
         </div>
@@ -444,7 +462,29 @@ export default function App() {
     </>
   );
 
-  const profilePage = (
+  const profilePage = !user && !loadingUser ? (
+    <>
+      <nav className="top-nav fade-in">
+        <div className="brand" onClick={() => navigate('/')}>
+          <div className="brand-mark">JT</div>
+          <span>Job Tracker</span>
+        </div>
+      </nav>
+      <div className="auth-wrapper fade-in">
+        <div className="auth-card">
+          <h2>Sign in to track your applications</h2>
+          <p className="muted">
+            Connect with Google to see your company rollups and classified replies. No fee—just
+            click and go.
+          </p>
+          <div className="sign-in-block">
+            <div ref={signInButtonRef} />
+            {authError && <p className="error">{authError}</p>}
+          </div>
+        </div>
+      </div>
+    </>
+  ) : (
     <>
       {user && gmailConnected === false && (
         <div className="inline-banner warning">
@@ -559,9 +599,6 @@ export default function App() {
           </div>
         </div>
 
-        {!user && !loadingUser && (
-          <div className="empty">Sign in to see your tracked applications.</div>
-        )}
         {jobsLoading && user && <div className="empty">Loading jobs…</div>}
         {jobsError && <div className="error">{jobsError}</div>}
         {!jobsLoading && user && jobs.length === 0 && !jobsError && (
@@ -769,11 +806,285 @@ export default function App() {
     </>
   );
 
+  const howItWorksPage = (
+    <>
+      <nav className="top-nav fade-in">
+        <div className="brand" onClick={() => navigate('/')}>
+          <div className="brand-mark">JT</div>
+          <span>Job Tracker</span>
+        </div>
+        <div className="nav-links">
+          <a
+            href="/how-it-works"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/how-it-works');
+            }}
+          >
+            How it works
+          </a>
+          <a
+            href="/pricing"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/pricing');
+            }}
+          >
+            Pricing
+          </a>
+          <a
+            href="/support"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/support');
+            }}
+          >
+            Support
+          </a>
+        </div>
+        <div className="nav-actions">
+          {user ? (
+            <button className="btn primary" onClick={() => navigate('/profile')}>
+              Go to dashboard
+            </button>
+          ) : (
+            <>
+              <button className="btn link" onClick={() => navigate('/profile')}>
+                Log in
+              </button>
+              <button className="btn primary" onClick={() => navigate('/profile')}>
+                Sign up
+              </button>
+            </>
+          )}
+        </div>
+      </nav>
+
+      <header className="hero one-col fade-in">
+        <div className="hero-copy pricing-hero">
+          <div className="eyebrow">How it works</div>
+          <h1>
+            Your inbox → clean rollups. <span className="highlight">Fast.</span>
+          </h1>
+          <p className="lede hero-headline">
+            Just enough detail to trust the connect—no secret sauce reveal, all signal.
+          </p>
+        </div>
+      </header>
+
+      <section className="panel fade-in pricing-panel">
+        <div className="how-grid">
+          <div className="how-card">
+            <p className="label">01</p>
+            <h3>Sign in</h3>
+            <p className="muted">
+              Google session only—no new passwords. You can bounce anytime.
+            </p>
+          </div>
+          <div className="how-card">
+            <p className="label">02</p>
+            <h3>Connect Gmail</h3>
+            <p className="muted">
+              Read-only. We scan for job replies, ignore promos, and keep tokens in your vault.
+            </p>
+          </div>
+          <div className="how-card">
+            <p className="label">03</p>
+            <h3>Auto sort</h3>
+            <p className="muted">
+              We gate what matters, classify the rest, and roll it up by company—applied, rejected,
+              next steps.
+            </p>
+          </div>
+          <div className="how-card">
+            <p className="label">04</p>
+            <h3>Work the board</h3>
+            <p className="muted">
+              Open a company, skim the key emails, jump straight into the Gmail thread when you need
+              to answer.
+            </p>
+          </div>
+        </div>
+
+        <div className="cta-block">
+          <h3>Ready? It&apos;s free.</h3>
+          <p className="muted">
+            Nightly sync plus a manual fetch button. Minimal setup, no fee—join and see your spread
+            in minutes.
+          </p>
+          <button className="btn primary" onClick={() => navigate('/profile')}>
+            Get started
+          </button>
+        </div>
+      </section>
+    </>
+  );
+
+  const supportPage = (
+    <>
+      <nav className="top-nav fade-in">
+        <div className="brand" onClick={() => navigate('/')}>
+          <div className="brand-mark">JT</div>
+          <span>Job Tracker</span>
+        </div>
+        <div className="nav-links">
+          <a
+            href="/how-it-works"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/how-it-works');
+            }}
+          >
+            How it works
+          </a>
+          <a
+            href="/pricing"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/pricing');
+            }}
+          >
+            Pricing
+          </a>
+          <a
+            href="/support"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/support');
+            }}
+          >
+            Support
+          </a>
+        </div>
+        <div className="nav-actions">
+          {user ? (
+            <button className="btn primary" onClick={() => navigate('/profile')}>
+              Go to dashboard
+            </button>
+          ) : (
+            <>
+              <button className="btn link" onClick={() => navigate('/profile')}>
+                Log in
+              </button>
+              <button className="btn primary" onClick={() => navigate('/profile')}>
+                Sign up
+              </button>
+            </>
+          )}
+        </div>
+      </nav>
+
+      <section className="fade-in support-section">
+        <div className="how-grid">
+          <div className="how-card">
+            <p className="label">Support</p>
+            <h3>Need help? I&apos;ve got you.</h3>
+            <p className="muted">Drop a line and I&apos;ll get you unstuck—no bots, just direct replies.</p>
+            <a className="btn primary" href="mailto:iamhks14@gmail.com">
+              Email support
+            </a>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+
+  const pricingPage = (
+    <>
+      <nav className="top-nav fade-in">
+        <div className="brand" onClick={() => navigate('/')}>
+          <div className="brand-mark">JT</div>
+          <span>Job Tracker</span>
+        </div>
+        <div className="nav-links">
+          <a
+            href="/how-it-works"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/how-it-works');
+            }}
+          >
+            How it works
+          </a>
+          <a
+            href="/pricing"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/pricing');
+            }}
+          >
+            Pricing
+          </a>
+          <a
+            href="/support"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('/support');
+            }}
+          >
+            Support
+          </a>
+        </div>
+        <div className="nav-actions">
+          {user ? (
+            <button className="btn primary" onClick={() => navigate('/profile')}>
+              Go to dashboard
+            </button>
+          ) : (
+            <>
+              <button className="btn link" onClick={() => navigate('/profile')}>
+                Log in
+              </button>
+              <button className="btn primary" onClick={() => navigate('/profile')}>
+                Sign up
+              </button>
+            </>
+          )}
+        </div>
+      </nav>
+
+      <header className="hero one-col fade-in">
+        <div className="hero-copy pricing-hero">
+          <div className="eyebrow">Pricing</div>
+          <h1>
+            Lol, no fee. <span className="highlight">It&apos;s free.</span>
+          </h1>
+          <p className="lede hero-headline">
+            We believe in universal basic app access—this should be freely available. No plans, no
+            gotchas, just vibes. If it helps you land the gig, that&apos;s enough.
+          </p>
+          <div className="pricing-actions">
+            <a
+              className="btn primary"
+              href="https://buymeacoffee.com/hemantsingh11"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Buy me a coffee?
+            </a>
+          </div>
+          <p className="muted small">Server costs are on me—tips keep the lights on.</p>
+        </div>
+      </header>
+
+    </>
+  );
+
   return (
     <div className="page">
       <div className="gradient-bg" />
       <div className="page-inner">
-        {isCompany ? companyPage : isProfile ? profilePage : marketingPage}
+        {isCompany
+          ? companyPage
+          : isProfile
+            ? profilePage
+            : isHowItWorks
+              ? howItWorksPage
+              : isSupport
+                ? supportPage
+                : isPricing
+                  ? pricingPage
+                  : marketingPage}
       </div>
     </div>
   );
