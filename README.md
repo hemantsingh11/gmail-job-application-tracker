@@ -27,6 +27,7 @@ A unified place to track every job application. Connect Gmail, classify job-rela
 - LLM pipeline gates job-related mail, then classifies: applied / rejected / next steps / comment only / not job related; results feed company counters.
 - Nightly cron at **12:45 AM ET** plus manual “Fetch Gmail now”.
 - React + Vite single-page app served by the Express backend in production.
+- Company pages show classified emails per employer, and each item links straight to the thread in Gmail.
 
 ## How it works
 ```
