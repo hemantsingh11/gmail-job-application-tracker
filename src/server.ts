@@ -1050,79 +1050,8 @@ async function start(): Promise<void> {
       oauth2Client.setCredentials(tokens);
       await tokenStore.saveTokens(ownerEmail, tokens as Record<string, unknown>);
 
-      const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-      const profilePromise = gmail.users.getProfile({ userId: 'me' });
-      const messagesPromise = gmail.users.messages.list({ userId: 'me', maxResults: 5 });
-      const [{ data: profile }, { data: messagesData }] = await Promise.all([
-        profilePromise,
-        messagesPromise,
-      ]);
-
-      const messages = messagesData.messages || [];
-      const detailed = await Promise.all(
-        messages.slice(0, 5).map(async (message) => {
-          const { data } = await gmail.users.messages.get({
-            userId: 'me',
-            id: message.id!,
-            format: 'metadata',
-            metadataHeaders: ['Subject', 'From', 'Date'],
-          });
-          const headers = data.payload ? data.payload.headers || [] : [];
-          return {
-            id: message.id,
-            subject: extractHeader(headers, 'Subject') || '(No subject)',
-            from: extractHeader(headers, 'From') || 'Unknown sender',
-            date: extractHeader(headers, 'Date') || '',
-            snippet: data.snippet || '',
-          };
-        })
-      );
-
-      const listItems = detailed
-        .map((msg) => {
-          return `
-            <li>
-              <p><strong>Subject:</strong> ${escapeHtml(msg.subject)}</p>
-              <p><strong>From:</strong> ${escapeHtml(msg.from)}</p>
-              <p><strong>Date:</strong> ${escapeHtml(msg.date)}</p>
-              <p><strong>Snippet:</strong> ${escapeHtml(msg.snippet)}</p>
-            </li>`;
-        })
-        .join('');
-
-      const html = `<!doctype html>
-        <html lang="en">
-          <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-            <title>Gmail Preview</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 30px; color: #222; }
-              ul { list-style: none; padding: 0; }
-              li { border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
-              a { color: #1a73e8; text-decoration: none; }
-              .actions { margin-top: 20px; display: flex; gap: 12px; }
-              button { padding: 10px 16px; cursor: pointer; }
-            </style>
-          </head>
-          <body>
-            <h1>Gmail snapshot</h1>
-            <p>Signed in as <strong>${escapeHtml(profile.emailAddress || '')}</strong></p>
-            <ul>${listItems || '<li>No recent messages.</li>'}</ul>
-            <div class="actions">
-              <button onclick="logout()">Logout</button>
-              <a href="/">Back to app</a>
-            </div>
-            <script>
-              function logout() {
-                sessionStorage.removeItem('googleUser');
-                window.location.href = '/';
-              }
-            </script>
-          </body>
-        </html>`;
-
-      return res.send(html);
+      // Redirect straight back to the app once Gmail is connected.
+      return res.redirect('/profile');
     } catch (err: any) {
       console.error('Google auth callback error', err);
       return res.status(500).send('Failed to read Gmail. Check the server logs for details.');
