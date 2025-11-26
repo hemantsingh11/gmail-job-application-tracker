@@ -15,6 +15,7 @@ function secretName(ownerEmail: string): string {
 
 export interface GmailState {
   lastInternalDateMs?: number;
+  historyId?: string;
 }
 
 export async function loadState(ownerEmail: string): Promise<GmailState | null> {

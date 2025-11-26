@@ -7,6 +7,7 @@ import { google } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import cron from 'node-cron';
 import { htmlToText } from 'html-to-text';
+import Redis from 'ioredis';
 import dotenv from 'dotenv';
 import type {
   AuthedRequest,
@@ -18,6 +19,7 @@ import type {
 import * as tokenStore from './gmailTokenStore';
 import * as gmailStateStore from './gmailStateStore';
 import { filterEmailsByCompany } from './companyFilter';
+import { callChat } from './openaiClient';
 
 async function logGmailDiagnostics(
   gmailContainer: Container,
@@ -75,13 +77,16 @@ const COSMOS_GMAIL_CONTAINER = process.env.COSMOS_GMAIL_CONTAINER || 'emails';
 const COSMOS_JOBS_DATABASE = process.env.COSMOS_JOBS_DATABASE || 'jobsdb';
 const COSMOS_JOBS_CONTAINER = process.env.COSMOS_JOBS_CONTAINER || 'applications';
 const PORT = Number(process.env.PORT || '3000');
+const REDIS_URL = process.env.REDIS_URL;
+const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const GOOGLE_REDIRECT_URI =
   process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback';
 const GMAIL_CRON = process.env.GMAIL_CRON_SCHEDULE || '45 0 * * *';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const EMAIL_CLASS_MODEL = process.env.EMAIL_CLASS_MODEL || 'gpt-4o-mini';
+const EMAIL_CLASS_MODEL = process.env.EMAIL_CLASS_MODEL || 'gpt-5-mini';
+const EMAIL_GATE_MODEL = process.env.EMAIL_GATE_MODEL || 'gpt-5-nano';
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const SESSION_DURATION_DAYS = Number(process.env.SESSION_DURATION_DAYS || '10');
 const SESSION_DURATION_MS = SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000;
@@ -94,6 +99,7 @@ const SESSION_COOKIE_OPTIONS = {
 };
 const EASTERN_TIMEZONE = 'America/New_York';
 const STATIC_DIR = path.join(__dirname, '..', 'client', 'dist');
+let redisClient: Redis | null = null;
 
 declare global {
   namespace Express {
@@ -105,7 +111,9 @@ declare global {
 
 requireEnv('SESSION_SECRET', SESSION_SECRET);
 if (OPENAI_API_KEY) {
-  console.log(`Email classification enabled (model: ${EMAIL_CLASS_MODEL}).`);
+  console.log(
+    `Email classification enabled (gate model: ${EMAIL_GATE_MODEL}, detail model: ${EMAIL_CLASS_MODEL}).`
+  );
 } else {
   console.warn('OPENAI_API_KEY not set. Job email classification is disabled.');
 }
@@ -117,13 +125,38 @@ function requireEnv(name: string, value: string | undefined | null): string {
   return value;
 }
 
+async function initRedis(): Promise<Redis> {
+  requireEnv('REDIS_URL', REDIS_URL);
+  const client = new Redis(REDIS_URL!, {
+    password: REDIS_PASSWORD || undefined,
+    tls: REDIS_URL?.startsWith('rediss://') ? {} : undefined,
+  });
+  try {
+    await client.ping();
+    console.log(`Connected to Redis at ${REDIS_URL}.`);
+  } catch (err: any) {
+    console.error('Failed to connect to Redis', err?.message || err);
+    throw err;
+  }
+  client.on('error', (err) => {
+    console.error('Redis error', err?.message || err);
+  });
+  return client;
+}
+
 async function initCosmos(): Promise<{ client: CosmosClient; container: Container }> {
   requireEnv('COSMOS_URI', COSMOS_URI);
   requireEnv('COSMOS_KEY', COSMOS_KEY);
   requireEnv('COSMOS_DATABASE', COSMOS_DATABASE);
   requireEnv('COSMOS_CONTAINER', COSMOS_CONTAINER);
 
-  const client = new CosmosClient({ endpoint: COSMOS_URI!, key: COSMOS_KEY! });
+  const client = new CosmosClient({
+    endpoint: COSMOS_URI!,
+    key: COSMOS_KEY!,
+    connectionPolicy: {
+      requestTimeout: 120000,
+    },
+  });
 
   const { database } = await client.databases.createIfNotExists({
     id: COSMOS_DATABASE!,
@@ -141,7 +174,13 @@ async function initGmailCosmos(): Promise<{ client: CosmosClient; container: Con
   requireEnv('COSMOS_URI', COSMOS_URI);
   requireEnv('COSMOS_KEY', COSMOS_KEY);
 
-  const client = new CosmosClient({ endpoint: COSMOS_URI!, key: COSMOS_KEY! });
+  const client = new CosmosClient({
+    endpoint: COSMOS_URI!,
+    key: COSMOS_KEY!,
+    connectionPolicy: {
+      requestTimeout: 120000,
+    },
+  });
   const { database } = await client.databases.createIfNotExists({
     id: COSMOS_GMAIL_DATABASE,
   });
@@ -158,7 +197,13 @@ async function initJobsCosmos(): Promise<{ client: CosmosClient; container: Cont
   requireEnv('COSMOS_URI', COSMOS_URI);
   requireEnv('COSMOS_KEY', COSMOS_KEY);
 
-  const client = new CosmosClient({ endpoint: COSMOS_URI!, key: COSMOS_KEY! });
+  const client = new CosmosClient({
+    endpoint: COSMOS_URI!,
+    key: COSMOS_KEY!,
+    connectionPolicy: {
+      requestTimeout: 120000,
+    },
+  });
   const { database } = await client.databases.createIfNotExists({
     id: COSMOS_JOBS_DATABASE,
   });
@@ -346,6 +391,56 @@ function extractMessageBody(part: any = {}): string {
   return '';
 }
 
+function redisEmailKey(ownerEmail: string, messageId: string): string {
+  const owner = (ownerEmail || '').toLowerCase();
+  return `gmail:${owner}:${messageId}`;
+}
+
+async function retryWithBackoff<T>(
+  operation: () => Promise<T>,
+  attempts = 4,
+  baseDelayMs = 200
+): Promise<T> {
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await operation();
+    } catch (err: any) {
+      lastErr = err;
+      const isLast = i === attempts - 1;
+      if (isLast) break;
+      const delay = baseDelayMs * Math.pow(2, i);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
+
+async function classifyIsJobRelated(emailDoc: GmailEmailDoc): Promise<boolean> {
+  if (!OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY not set; cannot run job-related gate.');
+  }
+  const systemPrompt = `Decide if a single email is about a job application or job process. Reply with JSON: {"job_related": true|false}. Treat interview requests, application confirmations, rejections, and next steps as job_related true. Ignore newsletters, marketing, alerts, and general promotions (job_related false).`;
+  const content = `Subject: ${emailDoc.subject || '(no subject)'}\nFrom: ${
+    emailDoc.from || 'unknown'
+  }\n\nBody:\n${emailDoc.body || emailDoc.snippet || ''}`;
+  const data = await callChat({
+    model: EMAIL_GATE_MODEL,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content },
+    ],
+  });
+  const message = data.choices?.[0]?.message?.content;
+  if (!message) {
+    throw new Error('Empty job gate response');
+  }
+  const parsed = JSON.parse(message);
+  return Boolean(parsed.job_related);
+}
+
 async function classifyEmail(emailDoc: GmailEmailDoc): Promise<ClassificationResult | null> {
   if (!OPENAI_API_KEY) {
     console.warn('OPENAI_API_KEY not set. Skipping classification.');
@@ -375,28 +470,15 @@ Always include a concise summary and company_name guess.`;
   }\n\nBody:\n${emailDoc.body || emailDoc.snippet || ''}`;
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: EMAIL_CLASS_MODEL,
-        temperature: 0,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content },
-        ],
-      }),
+    const data = await callChat({
+      model: EMAIL_CLASS_MODEL,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content },
+      ],
     });
-
-    const data = await response.json();
-    if (!response.ok) {
-      const errMessage = data?.error?.message || 'OpenAI classification failed';
-      throw new Error(errMessage);
-    }
 
     const message = data.choices?.[0]?.message?.content;
     if (!message) {
@@ -547,6 +629,11 @@ async function fetchAndStoreGmailEmails(
   if (!ownerEmail) {
     throw new Error('Owner email required for Gmail fetch');
   }
+  if (!redisClient) {
+    const err: any = new Error('Redis not available for Gmail fetch');
+    err.code = 'REDIS_UNAVAILABLE';
+    throw err;
+  }
   if (!emailContainer) {
     console.warn('Gmail container not ready, skipping fetch.');
     return { fetched: 0 };
@@ -577,93 +664,154 @@ async function fetchAndStoreGmailEmails(
 
   let state: gmailStateStore.GmailState = {};
   let lastInternalDateMs: number | null = null;
+  let historyId: string | null = null;
   if (useState) {
     state = (await gmailStateStore.loadState(ownerEmail)) || {};
     lastInternalDateMs = state.lastInternalDateMs ? Number(state.lastInternalDateMs) : null;
+    historyId = state.historyId ? String(state.historyId) : null;
   }
-
-  const queryParts: string[] = [];
-  if (queryOverride) {
-    queryParts.push(queryOverride);
-  } else if (lastInternalDateMs) {
-    const afterSeconds = Math.floor(lastInternalDateMs / 1000);
-    queryParts.push(`after:${afterSeconds}`);
-  } else {
-    queryParts.push('newer_than:7d');
-  }
-  const gmailQuery = queryParts.join(' ').trim();
 
   const profileResp = await gmail.users.getProfile({ userId: 'me' });
   const gmailAccountEmail = (profileResp.data.emailAddress || ownerEmail).toLowerCase();
+  const profileHistoryId = profileResp.data.historyId ? String(profileResp.data.historyId) : null;
   if (gmailAccountEmail !== ownerEmail) {
     console.warn(
       `Gmail account (${gmailAccountEmail}) differs from session owner (${ownerEmail}). Using session owner for storage.`
     );
   }
 
-  const docs: GmailEmailDoc[] = [];
-  let pageToken: string | undefined;
+  let usedHistorySync = false;
+  let historyMessageIds: string[] = [];
+  let newHistoryId: string | null = null;
+  if (useState && historyId && !queryOverride) {
+    try {
+      const seen = new Set<string>();
+      let pageToken: string | undefined;
+      let latestHistoryId = historyId;
+      do {
+        const historyResp = await gmail.users.history.list({
+          userId: 'me',
+          startHistoryId: historyId,
+          pageToken,
+          maxResults: 200,
+          historyTypes: ['messageAdded', 'labelAdded', 'labelRemoved'],
+        });
+        const history = historyResp.data.history || [];
+        pageToken = historyResp.data.nextPageToken || undefined;
+        for (const entry of history) {
+          if (entry.id && String(entry.id) > String(latestHistoryId)) {
+            latestHistoryId = String(entry.id);
+          }
+          const added = entry.messagesAdded || [];
+          for (const item of added) {
+            if (item.message?.id) {
+              seen.add(item.message.id);
+            }
+          }
+          const messages = entry.messages || [];
+          for (const msg of messages) {
+            if (msg.id) {
+              seen.add(msg.id);
+            }
+          }
+        }
+      } while (pageToken);
+      historyMessageIds = Array.from(seen);
+      usedHistorySync = true;
+      newHistoryId = latestHistoryId;
+      if (!historyMessageIds.length) {
+        console.log(`[Gmail] No new history events after ${historyId} for ${ownerEmail}`);
+      }
+    } catch (err: any) {
+      usedHistorySync = false;
+      historyMessageIds = [];
+      console.warn(`[Gmail] History sync failed; falling back to time-window query`, err?.message || err);
+    }
+  }
+
+  let gmailQuery = '';
+  if (!usedHistorySync) {
+    const queryParts: string[] = [];
+    if (queryOverride) {
+      queryParts.push(queryOverride);
+    } else if (lastInternalDateMs) {
+      const afterSeconds = Math.floor(lastInternalDateMs / 1000);
+      queryParts.push(`after:${afterSeconds}`);
+    } else {
+      queryParts.push('newer_than:7d');
+    }
+    gmailQuery = queryParts.join(' ').trim();
+  }
+
+  const storedDocs: GmailEmailDoc[] = [];
   let maxInternalDate = lastInternalDateMs || 0;
-  do {
-    const messageList = await gmail.users.messages.list({
+  const handleMessage = async (messageId: string, threadId?: string) => {
+    const { data } = await gmail.users.messages.get({
       userId: 'me',
-      q: gmailQuery || undefined,
-      maxResults: 100,
-      pageToken,
+      id: messageId,
+      format: 'full',
     });
-    const messages = messageList.data.messages || [];
-    pageToken = messageList.data.nextPageToken || undefined;
-    if (!messages.length) {
-      continue;
+
+    const headers = data.payload ? data.payload.headers || [] : [];
+    const internalDateMs = Number(data.internalDate) || Date.now();
+    const doc: GmailEmailDoc = {
+      id: data.id || '',
+      threadId: data.threadId || threadId || '',
+      owner: ownerEmail,
+      gmailAccount: gmailAccountEmail,
+      from: extractHeader(headers, 'From') || 'unknown',
+      to: extractHeader(headers, 'To') || '',
+      subject: extractHeader(headers, 'Subject') || '(No subject)',
+      date: extractHeader(headers, 'Date') || '',
+      snippet: data.snippet || '',
+      body: extractMessageBody(data.payload) || data.snippet || '',
+      labelIds: data.labelIds || [],
+      fetchedAt: new Date().toISOString(),
+      internalDate: internalDateMs,
+    };
+
+    if (internalDateMs > maxInternalDate) {
+      maxInternalDate = internalDateMs;
     }
 
-    for (const message of messages) {
-      const { data } = await gmail.users.messages.get({
-        userId: 'me',
-        id: message.id!,
-        format: 'full',
-      });
-
-      const headers = data.payload ? data.payload.headers || [] : [];
-      const internalDateMs = Number(data.internalDate) || Date.now();
-      const doc: GmailEmailDoc = {
-        id: data.id || '',
-        threadId: data.threadId || message.threadId || '',
-        owner: ownerEmail,
-        gmailAccount: gmailAccountEmail,
-        from: extractHeader(headers, 'From') || 'unknown',
-        to: extractHeader(headers, 'To') || '',
-        subject: extractHeader(headers, 'Subject') || '(No subject)',
-        date: extractHeader(headers, 'Date') || '',
-        snippet: data.snippet || '',
-        body: extractMessageBody(data.payload) || data.snippet || '',
-        labelIds: data.labelIds || [],
-        fetchedAt: new Date().toISOString(),
-        internalDate: internalDateMs,
-      };
-
-      if (internalDateMs > maxInternalDate) {
-        maxInternalDate = internalDateMs;
+    // If we already have this message stored, skip reprocessing to avoid repeated gating/classification.
+    let existingDoc: GmailEmailDoc | null = null;
+    try {
+      const { resource } = await retryWithBackoff(() =>
+        emailContainer.item(doc.id, ownerEmail).read<GmailEmailDoc>()
+      );
+      existingDoc = resource || null;
+      if (existingDoc?.classification?.status) {
+        return;
       }
-
-      let existingDoc: GmailEmailDoc | null = null;
-      try {
-        const { resource } = await emailContainer.item(doc.id, ownerEmail).read<GmailEmailDoc>();
-        existingDoc = resource || null;
-      } catch (err: any) {
-        if (err.code !== 404) {
-          console.error('Failed to read existing Gmail doc', err);
-        }
-      }
-
       if (existingDoc) {
-        doc.classification = existingDoc.classification;
-        doc.classifiedAt = existingDoc.classifiedAt;
-        doc.createdAt = existingDoc.createdAt || doc.fetchedAt;
+        doc.createdAt = existingDoc.createdAt || existingDoc.fetchedAt || doc.fetchedAt;
       }
+    } catch (err: any) {
+      if (err.code !== 404) {
+        console.error('Failed to read existing Gmail doc', err);
+      }
+    }
 
-      const { resource } = await emailContainer.items.upsert(doc);
+    const cacheKey = redisEmailKey(ownerEmail, doc.id);
+    await redisClient.set(cacheKey, JSON.stringify(doc));
+    console.log(`[Redis] Cached Gmail message ${doc.id} for ${ownerEmail}`);
+    let deleteFromRedis = false;
+    try {
+      const isJobRelated = await classifyIsJobRelated(doc);
+      deleteFromRedis = true;
+      if (!isJobRelated) {
+        console.log(`[Gate] Skipped non-job email ${doc.id} (${doc.subject})`);
+        return;
+      }
+      console.log(`[Gate] Job-related email ${doc.id} (${doc.subject})`);
+
+      const { resource } = await retryWithBackoff(() =>
+        emailContainer.items.upsert(doc)
+      );
       const alreadyClassified = Boolean(resource?.classification?.status);
+      storedDocs.push(doc);
+      console.log(`[Cosmos] Upserted Gmail message ${doc.id} (classified=${alreadyClassified})`);
 
       if (!alreadyClassified && jobsContainer && OPENAI_API_KEY) {
         try {
@@ -672,31 +820,83 @@ async function fetchAndStoreGmailEmails(
             doc.classification = classification;
             doc.classifiedAt = new Date().toISOString();
             await emailContainer.items.upsert(doc);
+            console.log(`[LLM] Classified ${doc.id} → ${classification.status}`);
           }
         } catch (err: any) {
           console.error('Failed to classify Gmail message', err);
         }
       }
-
-      docs.push(doc);
+    } finally {
+      if (deleteFromRedis) {
+        try {
+          await redisClient.del(cacheKey);
+          console.log(`[Redis] Deleted cache for message ${doc.id}`);
+        } catch (err: any) {
+          console.error('Failed to delete Redis Gmail cache', err?.message || err);
+        }
+      }
     }
-  } while (pageToken);
+  };
 
-  if (!docs.length) {
-    console.log('No new Gmail messages found for ingestion.');
+  if (usedHistorySync) {
+    for (const messageId of historyMessageIds) {
+      await handleMessage(messageId);
+    }
+  } else {
+    const messageRefs: Array<{ id: string; threadId?: string }> = [];
+    let pageToken: string | undefined;
+    do {
+      const messageList = await gmail.users.messages.list({
+        userId: 'me',
+        q: gmailQuery || undefined,
+        maxResults: 100,
+        pageToken,
+      });
+      const messages = messageList.data.messages || [];
+      pageToken = messageList.data.nextPageToken || undefined;
+      for (const message of messages) {
+        if (!message.id) continue;
+        messageRefs.push({ id: message.id, threadId: message.threadId || undefined });
+      }
+    } while (pageToken);
+
+    // Gmail list returns newest-first; process oldest-first for deterministic history updates.
+    for (const ref of messageRefs.reverse()) {
+      await handleMessage(ref.id, ref.threadId);
+    }
+  }
+
+  if (!storedDocs.length) {
+    console.log('No job-related Gmail messages found for ingestion.');
+    const nextHistory = newHistoryId || profileHistoryId || historyId;
+    if (useState && !skipStateUpdate && nextHistory && nextHistory !== historyId) {
+      await gmailStateStore.saveState(ownerEmail, { historyId: nextHistory });
+    }
     return { fetched: 0, owner: ownerEmail };
   }
 
-  if (useState && !skipStateUpdate && maxInternalDate > (lastInternalDateMs || 0)) {
-    await gmailStateStore.saveState(ownerEmail, { lastInternalDateMs: maxInternalDate });
+  if (useState && !skipStateUpdate) {
+    const nextHistory = newHistoryId || profileHistoryId || historyId;
+    const shouldUpdateCursor = maxInternalDate > (lastInternalDateMs || 0);
+    const shouldUpdateHistory = Boolean(nextHistory && nextHistory !== historyId);
+    if (shouldUpdateCursor || shouldUpdateHistory) {
+      const nextState: gmailStateStore.GmailState = {};
+      if (shouldUpdateCursor) {
+        nextState.lastInternalDateMs = maxInternalDate;
+      }
+      if (shouldUpdateHistory && nextHistory) {
+        nextState.historyId = nextHistory;
+      }
+      await gmailStateStore.saveState(ownerEmail, nextState);
+    }
   }
 
   console.log(
-    `Stored or updated ${docs.length} Gmail messages for ${ownerEmail}${
+    `Stored or updated ${storedDocs.length} Gmail messages for ${ownerEmail}${
       gmailQuery ? ` (query: "${gmailQuery}")` : ''
     }`
   );
-  return { fetched: docs.length, owner: ownerEmail };
+  return { fetched: storedDocs.length, owner: ownerEmail };
 }
 
 function scheduleGmailJob(emailContainer: Container | null, jobsContainer: Container | null): void {
@@ -751,6 +951,7 @@ async function start(): Promise<void> {
     next();
   });
 
+  redisClient = await initRedis();
   const { container: profileContainer } = await initCosmos();
   const { container: gmailContainer } = await initGmailCosmos();
   const { container: jobsContainer } = await initJobsCosmos();
@@ -984,6 +1185,9 @@ async function start(): Promise<void> {
           error: 'Gmail access not configured. Please connect your Google account.',
           code: 'NO_GMAIL_TOKENS',
         });
+      }
+      if (err.code === 'REDIS_UNAVAILABLE') {
+        return res.status(503).json({ error: 'Redis unavailable for Gmail fetch' });
       }
       console.error('Manual Gmail fetch failed', err);
       return res.status(500).json({ error: 'Failed to fetch Gmail' });
